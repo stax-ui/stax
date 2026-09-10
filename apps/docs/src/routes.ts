@@ -62,7 +62,10 @@ const HomeRoute = Route.make("/").pipe(
       }),
     render: (data) => HomePage(data),
   }),
-  Route.meta({ title: "Stax | Reactive UI Built on Effect.ts" }),
+  Route.meta({
+    title: "Stax | Reactive UI Built on Effect.ts",
+    description: "A reactive UI library ecosystem built on top of Effect.ts.",
+  }),
 );
 
 // ─── Docs index ──────────────────────────────────────────────────────────────
@@ -129,7 +132,10 @@ const ContactRoute = Route.make("/contact").pipe(
     load: () => Effect.succeed({}),
     render: () => ContactPage(),
   }),
-  Route.meta({ title: "Contact | Stax" }),
+  Route.meta({
+    title: "Contact | Stax",
+    description: "Get in touch about Stax.",
+  }),
 );
 
 // ─── Router ──────────────────────────────────────────────────────────────────
