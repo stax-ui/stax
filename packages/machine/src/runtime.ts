@@ -1,0 +1,606 @@
+/**
+ * State machine runtime.
+ *
+ * Scope of this file (first-pass runtime):
+ * - Context store with `self.assign` (per-handler batching)
+ * - Event queue with per-machine mutex — one handler at a time, FIFO
+ * - State scope machinery — each state gets its own CloseableScope
+ *   that closes on transition, firing any `addFinalizer`s and
+ *   canceling any `forkScoped` fibers registered inside the state fn
+ * - Output projection — pure fn of context, recomputed on any assign,
+ *   subscribers notified when the projected value differs by reference
+ * - Handler installation timing — state fn's Effect runs first,
+ *   handlers install on return; events dispatched during the state
+ *   fn queue and drain after
+ * - Transition value interpretation — `self.transition(...)`'s
+ *   returned value drives the next state entry; reentrant transitions
+ *   are supported with a depth cap
+ * - Basic MachineHandle: `snapshot`, `output`, `state`, `inState`,
+ *   `subscribe`, `subscribeTo`, `subscribeState`, `subscribeInState`,
+ *   `dispatch`, `dispatchOrFail`
+ *
+ * Not yet:
+ * - `self.transitionAwait` — needs register/go/scope lifecycle wiring
+ * - `awaitState` — needs Deferred wiring keyed per state name
+ * - `subscribeEffect` / `subscribeToEffect` / etc. — Effect-flavored
+ *   siblings of the callback subscribers
+ * - `canDispatch` + `subscribeCanDispatch` — reactive predicate for UI
+ * - `availableEvents` + `subscribeAvailableEvents`
+ * - `self.onExit` sugar (Effect.addFinalizer works today)
+ * - Machine.Factory + Machine.factoryLayer + `.spawn(args)`
+ * - Global `on:` handler map (spec-level fallback handlers)
+ */
+
+import { Effect, Exit, Scope } from "effect";
+
+import {
+  UnhandledEvent,
+  type HandlerMap,
+  type MachineHandle,
+  type MachineSelf,
+  type Spec,
+  type Transition,
+} from "./types.js";
+
+// =============================================================================
+// Internal helpers
+// =============================================================================
+
+const TRANSITION_TAG = "@stax-ui/machine/Transition" as const;
+
+/** Duck-type check for a Transition value returned from a state fn / handler. */
+const isTransition = (value: unknown): value is Transition =>
+  typeof value === "object" &&
+  value !== null &&
+  (value as { _tag?: unknown })._tag === TRANSITION_TAG;
+
+/** Reference-equality shallow-object equality for output projection. */
+const shallowEqual = (a: unknown, b: unknown): boolean => {
+  if (Object.is(a, b)) return true;
+  if (
+    typeof a !== "object" ||
+    typeof b !== "object" ||
+    a === null ||
+    b === null
+  ) {
+    return false;
+  }
+  const ka = Object.keys(a as Record<string, unknown>);
+  const kb = Object.keys(b as Record<string, unknown>);
+  if (ka.length !== kb.length) return false;
+  for (const key of ka) {
+    if (
+      !Object.is(
+        (a as Record<string, unknown>)[key],
+        (b as Record<string, unknown>)[key],
+      )
+    ) {
+      return false;
+    }
+  }
+  return true;
+};
+
+/** Max chained transitions in a single event-processing cycle. */
+const REENTRY_DEPTH_CAP = 32;
+
+// =============================================================================
+// Runtime state
+// =============================================================================
+
+interface QueuedEvent {
+  readonly event: string;
+  readonly payload: unknown;
+}
+
+interface Runtime<States, Events, Context, Output> {
+  // Machine identity + spec
+  readonly spec: Spec<States, Events, Context, Output>;
+
+  // Live state
+  currentState: string;
+  currentPayload: unknown;
+  context: Context;
+  currentOutput: Output;
+  handlers: HandlerMap<States, Events> | null;
+
+  // Event loop
+  readonly eventQueue: Array<QueuedEvent>;
+  isProcessing: boolean;
+  dirtyOutput: boolean;
+
+  // State scope — closes on transition out
+  stateScope: Scope.CloseableScope | null;
+  // The machine's parent scope — everything nested closes when this does
+  readonly parentScope: Scope.Scope;
+
+  // Subscribers
+  readonly subOutput: Set<(output: Output) => void>;
+  readonly subOutputField: Map<string, Set<(value: unknown) => void>>;
+  readonly subState: Set<(state: string) => void>;
+  readonly subInState: Map<string, Set<() => void>>;
+}
+
+// =============================================================================
+// Public: build a runtime
+// =============================================================================
+
+/**
+ * Construct a Service machine's runtime from a builder. Returns a
+ * `MachineHandle` scoped to the caller's Scope. Called by
+ * `Machine.serviceLayer` to produce the service value.
+ */
+export const createRuntime = <States, Events, Context, Output, R>(
+  builder: (
+    self: MachineSelf<States, Events, Context>,
+  ) => Effect.Effect<Spec<States, Events, Context, Output>, never, R>,
+): Effect.Effect<
+  MachineHandle<States, Events, Output>,
+  never,
+  R | Scope.Scope
+> =>
+  Effect.gen(function* () {
+    const parentScope = yield* Effect.scope;
+
+    // `runtime` is created up front with placeholder spec/context/output
+    // so `self` can close over it. spec/context/output get patched in
+    // right after the builder returns.
+    //
+    // eslint-disable-next-line prefer-const
+    let runtime: Runtime<States, Events, Context, Output>;
+
+    // ---- self construction ----
+    // Built as an unknown-typed struct then cast to the strict
+    // MachineSelf interface at the boundary. The runtime doesn't
+    // have the machine's generics available at value time —
+    // enforcement is via the interface, satisfied by shape.
+    const self = {
+      get context() {
+        return runtime.context;
+      },
+      assign: (patchOrFn: unknown) => applyAssign(() => runtime, patchOrFn),
+      dispatch: (event: string, ...args: [] | [unknown]) =>
+        enqueue(() => runtime, event, args[0], /* orFail */ false),
+      dispatchOrFail: (event: string, ...args: [] | [unknown]) =>
+        enqueue(() => runtime, event, args[0], /* orFail */ true),
+      transition: (name: string, ...args: [] | [unknown]) =>
+        ({
+          _tag: TRANSITION_TAG,
+          target: name,
+          payload: args[0] ?? {},
+        }) as Transition,
+      transitionAwait: (
+        _register: (go: () => void) => () => void,
+        _name: string,
+        ..._args: [] | [unknown]
+      ) =>
+        Effect.dieMessage(
+          "self.transitionAwait: not implemented in the first-pass runtime",
+        ),
+      onExit: (effect: Effect.Effect<void>) =>
+        Effect.addFinalizer(() => effect),
+    } as unknown as MachineSelf<States, Events, Context>;
+
+    // Build the spec via the user's builder Effect.
+    const spec = yield* builder(self);
+
+    // ---- Runtime init ----
+    runtime = {
+      spec,
+      currentState: spec.initial,
+      currentPayload: {},
+      context: spec.context,
+      currentOutput: spec.output(spec.context),
+      handlers: null,
+      eventQueue: [],
+      isProcessing: false,
+      dirtyOutput: false,
+      stateScope: null,
+      parentScope,
+      subOutput: new Set(),
+      subOutputField: new Map(),
+      subState: new Set(),
+      subInState: new Map(),
+    };
+
+    // Enter the initial state synchronously so consumers hold a
+    // fully-ready handle when `createRuntime` returns. If the initial
+    // state is a task state that immediately transitions, we settle
+    // through the chain here; if it installs handlers, they're
+    // installed by the time dispatch calls arrive.
+    yield* enterState(runtime, spec.initial, {});
+
+    return buildHandle(runtime);
+  });
+
+// =============================================================================
+// Enter state
+// =============================================================================
+
+/**
+ * Enter a state: close the previous state scope, create a new one,
+ * run the state fn in it, install handlers or interpret the returned
+ * Transition, then drain the event queue.
+ */
+const enterState = <States, Events, Context, Output>(
+  runtime: Runtime<States, Events, Context, Output>,
+  name: string,
+  payload: unknown,
+): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    yield* enterStateRec(runtime, name, payload, 0);
+  });
+
+const enterStateRec = <States, Events, Context, Output>(
+  runtime: Runtime<States, Events, Context, Output>,
+  name: string,
+  payload: unknown,
+  depth: number,
+): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    if (depth > REENTRY_DEPTH_CAP) {
+      return yield* Effect.dieMessage(
+        `state machine reentry depth cap exceeded (>${REENTRY_DEPTH_CAP} chained transitions in one cycle) — likely an infinite transition loop`,
+      );
+    }
+
+    // Close the previous state scope (fires finalizers, cancels forked fibers).
+    if (runtime.stateScope) {
+      const closing = runtime.stateScope;
+      runtime.stateScope = null;
+      yield* Scope.close(closing, Exit.void);
+    }
+
+    // Clear handlers — new state hasn't installed its map yet.
+    runtime.handlers = null;
+
+    // Enter the new state.
+    runtime.currentState = name;
+    runtime.currentPayload = payload;
+    notifyState(runtime, name);
+
+    // New scope for this state.
+    const stateScope = yield* Scope.make();
+    runtime.stateScope = stateScope;
+
+    // Locate the state fn.
+    const stateFn = (
+      runtime.spec.states as Record<
+        string,
+        (payload: unknown) => Effect.Effect<unknown>
+      >
+    )[name];
+    if (!stateFn) {
+      return yield* Effect.dieMessage(
+        `state machine has no state named "${name}"`,
+      );
+    }
+
+    // Run the state fn in the state's scope.
+    const result = yield* stateFn(payload).pipe(
+      Effect.provideService(Scope.Scope, stateScope),
+    );
+
+    // Interpret the return value.
+    if (isTransition(result)) {
+      // Task state / condition-waiter that resolved — chain to next.
+      yield* enterStateRec(runtime, result.target, result.payload, depth + 1);
+      return;
+    }
+
+    if (result && typeof result === "object") {
+      // Active state — install handlers.
+      runtime.handlers = result as HandlerMap<States, Events>;
+    } else {
+      // void — no-op state. Handlers stay null.
+      runtime.handlers = null;
+    }
+
+    // Drain any events queued during entry.
+    yield* drainQueue(runtime);
+  });
+
+// =============================================================================
+// Event queue
+// =============================================================================
+
+/**
+ * Push an event on the queue. If the loop isn't running, start it.
+ * `orFail` controls what happens when the current state has no
+ * handler: `false` silently drops (Effect<void>), `true` fails with
+ * `UnhandledEvent`.
+ */
+const enqueue = <States, Events, Context, Output>(
+  getRuntime: () => Runtime<States, Events, Context, Output>,
+  event: string,
+  payload: unknown,
+  orFail: boolean,
+): Effect.Effect<void, UnhandledEvent> =>
+  Effect.gen(function* () {
+    const runtime = getRuntime();
+
+    if (orFail) {
+      // Strict variant: check right now whether we'd handle this.
+      // If not, fail immediately without queuing.
+      const handler = runtime.handlers?.[event as never] as
+        ((payload: unknown) => Effect.Effect<unknown>) | undefined;
+      if (!handler) {
+        return yield* Effect.fail(
+          new UnhandledEvent({ event, state: runtime.currentState }),
+        );
+      }
+    }
+
+    runtime.eventQueue.push({ event, payload });
+    if (!runtime.isProcessing) {
+      yield* drainQueue(runtime);
+    }
+  });
+
+/**
+ * Drain the event queue serially. One handler at a time; assigns
+ * within a handler batch into a single output notification when the
+ * handler resolves.
+ *
+ * If handlers aren't installed (state is entering, or state is a
+ * task/no-op with no handler map), the queue holds events — they'll
+ * drain when the next handler-installing state entry completes.
+ * Bail out immediately in that case rather than dropping events.
+ */
+const drainQueue = <States, Events, Context, Output>(
+  runtime: Runtime<States, Events, Context, Output>,
+): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    if (runtime.isProcessing) return;
+    runtime.isProcessing = true;
+
+    try {
+      while (runtime.eventQueue.length > 0 && runtime.handlers) {
+        const next = runtime.eventQueue.shift();
+        if (!next) break;
+        const handler = (runtime.handlers as Record<string, unknown> | null)?.[
+          next.event
+        ] as ((payload: unknown) => Effect.Effect<unknown>) | undefined;
+        if (!handler) {
+          // Current state has no handler for this specific event —
+          // drop it (silent dispatch semantics; strict callers used
+          // dispatchOrFail which checked at enqueue time).
+          continue;
+        }
+
+        // Run the handler; capture its return value.
+        runtime.dirtyOutput = false;
+        const result = yield* handler(next.payload);
+
+        // Notify output subscribers if any assign fired.
+        if (runtime.dirtyOutput) {
+          runtime.dirtyOutput = false;
+          const newOutput = runtime.spec.output(runtime.context);
+          notifyOutput(runtime, newOutput);
+        }
+
+        if (isTransition(result)) {
+          // Transition mid-drain — release the processing flag so
+          // enterStateRec can re-enter drainQueue cleanly after the
+          // new state's handlers install.
+          runtime.isProcessing = false;
+          yield* enterStateRec(runtime, result.target, result.payload, 0);
+          return; // enterStateRec will drain any remaining events
+        }
+        // Non-transition returns keep us in the current state; loop continues.
+      }
+    } finally {
+      runtime.isProcessing = false;
+    }
+  });
+
+// =============================================================================
+// Assign
+// =============================================================================
+
+const applyAssign = <States, Events, Context, Output>(
+  getRuntime: () => Runtime<States, Events, Context, Output>,
+  patchOrFn: unknown,
+): Effect.Effect<void> =>
+  Effect.sync(() => {
+    const runtime = getRuntime();
+    const patch =
+      typeof patchOrFn === "function"
+        ? (patchOrFn as (ctx: Context) => Partial<Context>)(runtime.context)
+        : (patchOrFn as Partial<Context>);
+    runtime.context = { ...runtime.context, ...patch };
+
+    if (runtime.isProcessing) {
+      // Inside a handler — batch: mark dirty, notify at handler end.
+      runtime.dirtyOutput = true;
+    } else {
+      // Outside handler context (e.g., from a mirror subscription
+      // callback): notify immediately.
+      const newOutput = runtime.spec.output(runtime.context);
+      notifyOutput(runtime, newOutput);
+    }
+  });
+
+// =============================================================================
+// Subscriber notification
+// =============================================================================
+
+const notifyOutput = <States, Events, Context, Output>(
+  runtime: Runtime<States, Events, Context, Output>,
+  newOutput: Output,
+): void => {
+  const oldOutput = runtime.currentOutput;
+  if (shallowEqual(oldOutput, newOutput)) return;
+  runtime.currentOutput = newOutput;
+
+  for (const sub of runtime.subOutput) {
+    try {
+      sub(newOutput);
+    } catch {
+      // Subscriber errors don't propagate — machine keeps running.
+    }
+  }
+
+  for (const [field, subs] of runtime.subOutputField) {
+    const oldValue = (oldOutput as Record<string, unknown>)[field];
+    const newValue = (newOutput as Record<string, unknown>)[field];
+    if (Object.is(oldValue, newValue)) continue;
+    for (const sub of subs) {
+      try {
+        sub(newValue);
+      } catch {
+        /* swallow */
+      }
+    }
+  }
+};
+
+const notifyState = <States, Events, Context, Output>(
+  runtime: Runtime<States, Events, Context, Output>,
+  name: string,
+): void => {
+  for (const sub of runtime.subState) {
+    try {
+      sub(name);
+    } catch {
+      /* swallow */
+    }
+  }
+  const inStateSubs = runtime.subInState.get(name);
+  if (inStateSubs) {
+    for (const sub of inStateSubs) {
+      try {
+        sub();
+      } catch {
+        /* swallow */
+      }
+    }
+  }
+};
+
+// =============================================================================
+// MachineHandle construction
+// =============================================================================
+
+const buildHandle = <States, Events, Context, Output>(
+  runtime: Runtime<States, Events, Context, Output>,
+): MachineHandle<States, Events, Output> => {
+  const dispatchFn = (event: string, ...args: [] | [unknown]) =>
+    enqueue(() => runtime, event, args[0], false);
+  const dispatchOrFailFn = (event: string, ...args: [] | [unknown]) =>
+    enqueue(() => runtime, event, args[0], true);
+
+  const handle = {
+    snapshot: () => runtime.currentOutput,
+    state: () => runtime.currentState,
+    inState: (name: string) => runtime.currentState === name,
+    canDispatch: (event: string) => runtime.handlers?.[event as never] != null,
+    availableEvents: () =>
+      runtime.handlers
+        ? (Object.keys(runtime.handlers) as unknown as ReadonlyArray<never>)
+        : ([] as ReadonlyArray<never>),
+
+    get output() {
+      return runtime.currentOutput;
+    },
+
+    subscribe: (cb: (output: Output) => void) => {
+      runtime.subOutput.add(cb);
+      return () => {
+        runtime.subOutput.delete(cb);
+      };
+    },
+
+    subscribeTo: (field: string, cb: (value: unknown) => void) => {
+      let subs = runtime.subOutputField.get(field);
+      if (!subs) {
+        subs = new Set();
+        runtime.subOutputField.set(field, subs);
+      }
+      subs.add(cb);
+      return () => {
+        subs?.delete(cb);
+        if (subs?.size === 0) runtime.subOutputField.delete(field);
+      };
+    },
+
+    subscribeState: (cb: (state: string) => void) => {
+      runtime.subState.add(cb);
+      return () => {
+        runtime.subState.delete(cb);
+      };
+    },
+
+    subscribeInState: (name: string, cb: () => void) => {
+      let subs = runtime.subInState.get(name);
+      if (!subs) {
+        subs = new Set();
+        runtime.subInState.set(name, subs);
+      }
+      subs.add(cb);
+      return () => {
+        subs?.delete(cb);
+        if (subs?.size === 0) runtime.subInState.delete(name);
+      };
+    },
+
+    subscribeCanDispatch: (
+      _event: string,
+      _cb: (canDispatch: boolean) => void,
+    ) => {
+      throw new Error(
+        "subscribeCanDispatch: not implemented in the first-pass runtime",
+      );
+    },
+
+    subscribeAvailableEvents: (_cb: (events: ReadonlyArray<never>) => void) => {
+      throw new Error(
+        "subscribeAvailableEvents: not implemented in the first-pass runtime",
+      );
+    },
+
+    // Effect-flavored siblings — stubbed for the first pass.
+    subscribeEffect: (_cb: (output: Output) => Effect.Effect<void>) =>
+      Effect.dieMessage(
+        "subscribeEffect: not implemented in the first-pass runtime",
+      ) as never,
+    subscribeToEffect: (
+      _field: string,
+      _cb: (value: unknown) => Effect.Effect<void>,
+    ) =>
+      Effect.dieMessage(
+        "subscribeToEffect: not implemented in the first-pass runtime",
+      ) as never,
+    subscribeStateEffect: (_cb: (state: string) => Effect.Effect<void>) =>
+      Effect.dieMessage(
+        "subscribeStateEffect: not implemented in the first-pass runtime",
+      ) as never,
+    subscribeInStateEffect: (_name: string, _cb: () => Effect.Effect<void>) =>
+      Effect.dieMessage(
+        "subscribeInStateEffect: not implemented in the first-pass runtime",
+      ) as never,
+    subscribeCanDispatchEffect: (
+      _event: string,
+      _cb: (canDispatch: boolean) => Effect.Effect<void>,
+    ) =>
+      Effect.dieMessage(
+        "subscribeCanDispatchEffect: not implemented in the first-pass runtime",
+      ) as never,
+    subscribeAvailableEventsEffect: (
+      _cb: (events: ReadonlyArray<never>) => Effect.Effect<void>,
+    ) =>
+      Effect.dieMessage(
+        "subscribeAvailableEventsEffect: not implemented in the first-pass runtime",
+      ) as never,
+
+    dispatch: dispatchFn,
+    dispatchOrFail: dispatchOrFailFn,
+
+    awaitState: (_name: string) =>
+      Effect.dieMessage(
+        "awaitState: not implemented in the first-pass runtime",
+      ) as never,
+  };
+
+  return handle as unknown as MachineHandle<States, Events, Output>;
+};
