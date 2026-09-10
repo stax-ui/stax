@@ -8,12 +8,20 @@
 import { Cause, Effect, Exit, Option, Scope } from "effect";
 import { describe, expect, it } from "vitest";
 
-import { Machine, UnhandledEvent, type MachineHandle } from "./index.js";
+import {
+  Machine,
+  MalformedSpec,
+  TransitionLimit,
+  UnhandledEvent,
+  type MachineHandle,
+} from "./index.js";
 
 // Run a scoped Effect to a Promise, closing the scope on completion.
+// Accepts any error channel and dies on failure — tests that expect
+// a specific failure should use Effect.exit and inspect the Cause.
 const runScoped = <A>(
-  effect: Effect.Effect<A, never, Scope.Scope>,
-): Promise<A> => Effect.runPromise(Effect.scoped(effect));
+  effect: Effect.Effect<A, unknown, Scope.Scope>,
+): Promise<A> => Effect.runPromise(Effect.scoped(effect.pipe(Effect.orDie)));
 
 // -----------------------------------------------------------------------------
 // A minimal Counter machine — exercises: context + assign, event
@@ -82,7 +90,7 @@ const CounterLayer = Machine.serviceLayer(Counter, (self) =>
 const withCounter = <A>(
   fn: (
     counter: MachineHandle<CounterStates, CounterEvents, CounterOutput>,
-  ) => Effect.Effect<A, never, Scope.Scope>,
+  ) => Effect.Effect<A, unknown, Scope.Scope>,
 ): Promise<A> =>
   runScoped(
     Effect.gen(function* () {
@@ -135,9 +143,12 @@ describe("Machine runtime — Service", () => {
           const failure = Cause.failureOption(result.cause);
           expect(Option.isSome(failure)).toBe(true);
           if (Option.isSome(failure)) {
-            expect(failure.value).toBeInstanceOf(UnhandledEvent);
-            expect(failure.value.event).toBe("INC");
-            expect(failure.value.state).toBe("frozen");
+            const err = failure.value;
+            expect(err).toBeInstanceOf(UnhandledEvent);
+            if (err instanceof UnhandledEvent) {
+              expect(err.event).toBe("INC");
+              expect(err.state).toBe("frozen");
+            }
           }
         }
       }),
@@ -288,6 +299,113 @@ describe("Machine runtime — Service", () => {
         expect(fires).toBe(1);
         expect(batch.snapshot()).toEqual({ a: 1, b: 2 });
       }).pipe(Effect.provide(layer)),
+    );
+  });
+
+  it("infinite transition loop fails with typed TransitionLimit (not a die)", () => {
+    // A machine whose two task states transition back and forth.
+    // The runtime's reentry depth cap catches this and surfaces a
+    // typed failure — no runtime surprise from die.
+    interface LoopStates {
+      a: {};
+      b: {};
+    }
+    class Loop extends Machine.Service<Loop, LoopStates, {}, {}, {}, never>()(
+      "Loop",
+    ) {}
+
+    const layer = Machine.serviceLayer(Loop, (self) =>
+      Effect.succeed({
+        initial: "a" as const,
+        context: {},
+        output: () => ({}),
+        states: {
+          a: () => Effect.succeed(self.transition("b")),
+          b: () => Effect.succeed(self.transition("a")),
+        },
+      }),
+    );
+
+    return Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          // Layer build enters the initial state → immediately loops.
+          const result = yield* Effect.exit(
+            Effect.gen(function* () {
+              yield* Loop;
+            }).pipe(Effect.provide(layer)),
+          );
+          expect(Exit.isFailure(result)).toBe(true);
+          if (Exit.isFailure(result)) {
+            const failure = Cause.failureOption(result.cause);
+            expect(Option.isSome(failure)).toBe(true);
+            if (Option.isSome(failure)) {
+              const err = failure.value;
+              expect(err).toBeInstanceOf(TransitionLimit);
+              if (err instanceof TransitionLimit) {
+                expect(err.depth).toBeGreaterThan(30);
+                expect(err.trace.length).toBeGreaterThan(30);
+              }
+            }
+          }
+        }),
+      ),
+    );
+  });
+
+  it("transition to a non-existent state fails with typed MalformedSpec (not a die)", () => {
+    interface BadStates {
+      good: {};
+    }
+    class Bad extends Machine.Service<
+      Bad,
+      BadStates,
+      { GO_BAD: {} },
+      {},
+      {},
+      never
+    >()("Bad") {}
+
+    const layer = Machine.serviceLayer(Bad, (self) =>
+      Effect.succeed({
+        initial: "good" as const,
+        context: {},
+        output: () => ({}),
+        states: {
+          good: () =>
+            Effect.succeed({
+              // Cast to sneak a bogus state name past the compiler.
+              GO_BAD: () =>
+                Effect.succeed(self.transition("bogus" as never, {} as never)),
+            }),
+        },
+      }),
+    );
+
+    return Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const result = yield* Effect.exit(
+            Effect.gen(function* () {
+              const bad = yield* Bad;
+              yield* bad.dispatch("GO_BAD");
+            }).pipe(Effect.provide(layer)),
+          );
+          expect(Exit.isFailure(result)).toBe(true);
+          if (Exit.isFailure(result)) {
+            const failure = Cause.failureOption(result.cause);
+            expect(Option.isSome(failure)).toBe(true);
+            if (Option.isSome(failure)) {
+              const err = failure.value;
+              expect(err).toBeInstanceOf(MalformedSpec);
+              if (err instanceof MalformedSpec) {
+                expect(err.state).toBe("bogus");
+                expect(err.reason).toContain("bogus");
+              }
+            }
+          }
+        }),
+      ),
     );
   });
 });

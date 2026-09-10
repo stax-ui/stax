@@ -37,6 +37,54 @@ export class UnhandledEvent extends Data.TaggedError(
   readonly state: string;
 }> {}
 
+/**
+ * Failure raised when the runtime tries to enter a state whose name
+ * doesn't appear in the spec's `states` map. Fires on the initial
+ * state entry (from Layer build) or on any `self.transition` that
+ * targets a missing name — TS should catch the latter, but a
+ * cast-through or dynamic call can still land here at runtime.
+ *
+ * Framework-side "programmer bug" surface — but tagged and
+ * catchable so production callers can log-and-recover rather than
+ * crash the process.
+ */
+export class MalformedSpec extends Data.TaggedError(
+  "@stax-ui/machine/MalformedSpec",
+)<{
+  readonly reason: string;
+  readonly state?: string;
+}> {}
+
+/**
+ * Failure raised when the runtime chains too many transitions in a
+ * single event-processing cycle — typically indicates an infinite
+ * transition loop in the state fns (state A transitions to B whose
+ * entry transitions back to A, etc.). Depth cap is 32 by default.
+ *
+ * Carries the sequence of states we bounced through so the loop is
+ * diagnosable from the error alone.
+ */
+export class TransitionLimit extends Data.TaggedError(
+  "@stax-ui/machine/TransitionLimit",
+)<{
+  readonly depth: number;
+  readonly trace: readonly string[];
+}> {}
+
+/**
+ * Failure raised when an as-yet-unimplemented feature is called at
+ * runtime. Present in the error channel of every deferred method so
+ * type-level users know upfront that the call can fail — no
+ * runtime surprises. Removed from the error channel of each method
+ * as the feature lands in a follow-up commit.
+ */
+export class NotImplemented extends Data.TaggedError(
+  "@stax-ui/machine/NotImplemented",
+)<{
+  readonly feature: string;
+  readonly detail?: string;
+}> {}
+
 // =============================================================================
 // Generic helpers
 // =============================================================================
@@ -88,7 +136,7 @@ export interface MachineSelf<States, Events, Context> {
   dispatch<K extends keyof Events & string>(
     event: K,
     ...args: PayloadArg<Events[K]>
-  ): Effect.Effect<void>;
+  ): Effect.Effect<void, MalformedSpec | TransitionLimit>;
 
   /**
    * Same as `dispatch`, but fails with `UnhandledEvent` when the
@@ -99,7 +147,7 @@ export interface MachineSelf<States, Events, Context> {
   dispatchOrFail<K extends keyof Events & string>(
     event: K,
     ...args: PayloadArg<Events[K]>
-  ): Effect.Effect<void, UnhandledEvent>;
+  ): Effect.Effect<void, UnhandledEvent | MalformedSpec | TransitionLimit>;
 
   /**
    * Construct a transition to `name` with `payload`. Return the
@@ -118,12 +166,16 @@ export interface MachineSelf<States, Events, Context> {
    * machine state, DOM event, socket, timer) and returns an
    * unsubscribe fn that fires when the state scope closes. Same
    * shape as `Effect.async`.
+   *
+   * Not implemented in the first-pass runtime — currently fails
+   * with `NotImplemented`. Follow-up commit removes that from the
+   * error channel once wiring lands.
    */
   transitionAwait<K extends keyof States & string>(
     register: (go: () => void) => () => void,
     name: K,
     ...args: PayloadArg<States[K]>
-  ): Effect.Effect<Transition<K, States[K]>>;
+  ): Effect.Effect<Transition<K, States[K]>, NotImplemented>;
 
   /**
    * Sugar over `Effect.addFinalizer` scoped to the current state's
@@ -241,38 +293,45 @@ export interface MachineHandle<States, Events, Output> {
   // -------- Effect-flavored subscribes (Stax-friendly) --------
   subscribeEffect(
     cb: (output: Output) => Effect.Effect<void>,
-  ): Effect.Effect<void, never, Scope.Scope>;
+  ): Effect.Effect<void, NotImplemented, Scope.Scope>;
   subscribeToEffect<K extends keyof Output>(
     field: K,
     cb: (value: Output[K]) => Effect.Effect<void>,
-  ): Effect.Effect<void, never, Scope.Scope>;
+  ): Effect.Effect<void, NotImplemented, Scope.Scope>;
   subscribeStateEffect(
     cb: (state: keyof States & string) => Effect.Effect<void>,
-  ): Effect.Effect<void, never, Scope.Scope>;
+  ): Effect.Effect<void, NotImplemented, Scope.Scope>;
   subscribeInStateEffect<K extends keyof States & string>(
     name: K,
     cb: () => Effect.Effect<void>,
-  ): Effect.Effect<void, never, Scope.Scope>;
+  ): Effect.Effect<void, NotImplemented, Scope.Scope>;
   subscribeCanDispatchEffect<K extends keyof Events & string>(
     event: K,
     cb: (canDispatch: boolean) => Effect.Effect<void>,
-  ): Effect.Effect<void, never, Scope.Scope>;
+  ): Effect.Effect<void, NotImplemented, Scope.Scope>;
   subscribeAvailableEventsEffect(
     cb: (events: ReadonlyArray<keyof Events & string>) => Effect.Effect<void>,
-  ): Effect.Effect<void, never, Scope.Scope>;
+  ): Effect.Effect<void, NotImplemented, Scope.Scope>;
 
   // -------- Dispatch --------
   dispatch<K extends keyof Events & string>(
     event: K,
     ...args: PayloadArg<Events[K]>
-  ): Effect.Effect<void>;
+  ): Effect.Effect<void, MalformedSpec | TransitionLimit>;
   dispatchOrFail<K extends keyof Events & string>(
     event: K,
     ...args: PayloadArg<Events[K]>
-  ): Effect.Effect<void, UnhandledEvent>;
+  ): Effect.Effect<void, UnhandledEvent | MalformedSpec | TransitionLimit>;
 
   // -------- External coordination --------
-  awaitState<K extends keyof States & string>(name: K): Effect.Effect<void>;
+  /**
+   * Suspends until the machine enters `name`. Not implemented in
+   * the first-pass runtime — currently fails with `NotImplemented`.
+   * Follow-up commit removes that from the error channel.
+   */
+  awaitState<K extends keyof States & string>(
+    name: K,
+  ): Effect.Effect<void, NotImplemented>;
 }
 
 /**
