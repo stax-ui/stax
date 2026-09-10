@@ -4,6 +4,7 @@
   "description": "Framework-neutral state machines for Effect — declarative reducers with typed events, per-state payloads, and reactive snapshot/subscribe outputs",
   "type": "module",
   "license": "MPL-2.0",
+  "private": true,
   "publishConfig": {
     "access": "public"
   },
