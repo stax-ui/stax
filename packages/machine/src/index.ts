@@ -40,11 +40,14 @@ import { Context, Effect, Layer, type Scope } from "effect";
 import type * as ContextModule from "effect/Context";
 
 import { createRuntime } from "./runtime.js";
-import type {
-  MachineFactory,
-  MachineHandle,
-  MachineSelf,
-  Spec,
+import {
+  MalformedSpec,
+  NotImplemented,
+  TransitionLimit,
+  type MachineFactory,
+  type MachineHandle,
+  type MachineSelf,
+  type Spec,
 } from "./types.js";
 
 // =============================================================================
@@ -63,7 +66,12 @@ export type {
   Transition,
 } from "./types.js";
 
-export { UnhandledEvent } from "./types.js";
+export {
+  MalformedSpec,
+  NotImplemented,
+  TransitionLimit,
+  UnhandledEvent,
+} from "./types.js";
 
 // =============================================================================
 // Class-based declaration
@@ -106,7 +114,7 @@ export interface ServiceClass<
   readonly [_context]?: Context;
   readonly [_output]?: Output;
   readonly [_deps]?: R;
-  Default?: Layer.Layer<Self, never, R>;
+  Default?: Layer.Layer<Self, MalformedSpec | TransitionLimit, R>;
 }
 
 /**
@@ -134,7 +142,7 @@ export interface FactoryClass<
   readonly [_context]?: Context;
   readonly [_output]?: Output;
   readonly [_deps]?: R;
-  Default?: Layer.Layer<Self, never, R>;
+  Default?: Layer.Layer<Self, NotImplemented, R>;
 }
 
 /**
@@ -231,7 +239,7 @@ export const serviceLayer = <Self, States, Events, Context, Output, R>(
   builder: (
     self: MachineSelf<States, Events, Context>,
   ) => Effect.Effect<Spec<States, Events, Context, Output>, never, R>,
-): Layer.Layer<Self, never, R> => {
+): Layer.Layer<Self, MalformedSpec | TransitionLimit, R> => {
   const tag = cls as unknown as Context.Tag<
     Self,
     MachineHandle<States, Events, Output>
@@ -263,7 +271,7 @@ export const factoryLayer = <Self, States, Events, Inputs, Context, Output, R>(
     never,
     R
   >,
-): Layer.Layer<Self, never, R> => {
+): Layer.Layer<Self, NotImplemented, R> => {
   const tag = cls as unknown as Context.Tag<
     Self,
     MachineFactory<States, Events, Inputs, Output>
@@ -274,8 +282,8 @@ export const factoryLayer = <Self, States, Events, Inputs, Context, Output, R>(
       // Consume `builder` at the type level so its generics stay bound;
       // real wiring in the follow-up commit.
       void builder;
-      return yield* Effect.dieMessage(
-        "Machine.factoryLayer: not implemented in the first-pass runtime",
+      return yield* Effect.fail(
+        new NotImplemented({ feature: "Machine.factoryLayer" }),
       );
     }),
   );

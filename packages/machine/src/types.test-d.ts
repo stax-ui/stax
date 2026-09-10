@@ -127,11 +127,19 @@ self.context.bogus;
 // `self.dispatch` / `self.dispatchOrFail` — Event typing
 // =============================================================================
 
-const _d1: Effect.Effect<void> = self.dispatch("AUTHENTICATED", {
-  user: { id: "u1", name: "n" },
-});
-const _d2: Effect.Effect<void> = self.dispatch("SIGN_OUT");
-const _d3: Effect.Effect<void> = self.dispatch("EXPIRE");
+// dispatch carries MalformedSpec | TransitionLimit in the error
+// channel — the machine can fail from within a handler if a bad
+// transition or infinite loop happens downstream. Callers who don't
+// want to handle these can `Effect.orDie` them.
+type DispatchFailures =
+  import("./index.js").MalformedSpec | import("./index.js").TransitionLimit;
+
+const _d1: Effect.Effect<void, DispatchFailures> = self.dispatch(
+  "AUTHENTICATED",
+  { user: { id: "u1", name: "n" } },
+);
+const _d2: Effect.Effect<void, DispatchFailures> = self.dispatch("SIGN_OUT");
+const _d3: Effect.Effect<void, DispatchFailures> = self.dispatch("EXPIRE");
 
 // @ts-expect-error - "BOGUS_EVENT" isn't a declared event.
 self.dispatch("BOGUS_EVENT");
@@ -142,9 +150,11 @@ self.dispatch("AUTHENTICATED");
 // @ts-expect-error - payload shape wrong.
 self.dispatch("AUTHENTICATED", { user: "not a user" });
 
-// dispatchOrFail returns typed failure.
-const _f1: Effect.Effect<void, import("./index.js").UnhandledEvent> =
-  self.dispatchOrFail("SIGN_OUT");
+// dispatchOrFail adds UnhandledEvent on top of the dispatch failures.
+const _f1: Effect.Effect<
+  void,
+  import("./index.js").UnhandledEvent | DispatchFailures
+> = self.dispatchOrFail("SIGN_OUT");
 
 // =============================================================================
 // `self.transitionAwait(...)` — the async-transition primitive
@@ -152,10 +162,10 @@ const _f1: Effect.Effect<void, import("./index.js").UnhandledEvent> =
 
 declare const register: (go: () => void) => () => void;
 
-const _ta1: Effect.Effect<Transition<"signedOut", {}>> = self.transitionAwait(
-  register,
-  "signedOut",
-);
+const _ta1: Effect.Effect<
+  Transition<"signedOut", {}>,
+  import("./index.js").NotImplemented
+> = self.transitionAwait(register, "signedOut");
 
 // @ts-expect-error - wrong target state.
 self.transitionAwait(register, "bogus");
