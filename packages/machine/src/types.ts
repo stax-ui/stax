@@ -13,13 +13,16 @@ import { Data, type Effect, type Scope } from "effect";
 // Core value types
 // =============================================================================
 
+export const TransitionTypeId = Symbol.for("@stax-ui/machine/Transition");
+export type TransitionTypeId = typeof TransitionTypeId;
+
 /**
  * A state-change instruction — returned from a state fn or handler.
  * The runtime interprets it and drives the transition; state fns
  * don't call any `transition()` method imperatively.
  */
 export interface Transition<S extends string = string, P = unknown> {
-  readonly _tag: "@stax-ui/machine/Transition";
+  readonly [TransitionTypeId]: TransitionTypeId;
   readonly target: S;
   readonly payload: P;
 }
@@ -85,6 +88,34 @@ export class NotImplemented extends Data.TaggedError(
   readonly detail?: string;
 }> {}
 
+/**
+ * Failure raised when `self.assign` / `self.dispatch` /
+ * `self.dispatchOrFail` is called before the machine's builder has
+ * returned its spec. Happens when a subscription registered in the
+ * builder (e.g., `streamMachine.subscribeToEffect(...)` whose
+ * callback calls `self.assign`) fires synchronously at subscribe
+ * time — the emit arrives before the builder Effect resolves, so
+ * runtime state (context, event queue) doesn't exist yet.
+ *
+ * Present in the error channel of the three `self` methods that
+ * touch runtime state. Callers who don't care about early emits
+ * (the common case for mirror subscriptions) can `.pipe(Effect.ignore)`
+ * at the call site. Callers who want to buffer can catchTag and
+ * re-run later once the machine settles.
+ *
+ * `self.context` also can't be read before init, but it's a
+ * synchronous getter — it throws a descriptive native Error rather
+ * than surfacing this typed failure. Don't read `self.context` from
+ * subscription callbacks; use `self.assign((ctx) => ...)`'s
+ * computed-patch form instead (which reads via the callback arg,
+ * post-init).
+ */
+export class MachineUninitialized extends Data.TaggedError(
+  "@stax-ui/machine/MachineUninitialized",
+)<{
+  readonly operation: string;
+}> {}
+
 // =============================================================================
 // Generic helpers
 // =============================================================================
@@ -119,35 +150,71 @@ export type PayloadArg<T> = [T] extends [Record<string, never>]
  * the state map and `self.assign(patch)` checks against Context.
  */
 export interface MachineSelf<States, Events, Context> {
-  /** Current committed context. Plain getter — no yield. */
+  /**
+   * Current committed context. Plain getter — no yield.
+   *
+   * **Only valid inside state fns and their handlers** — both run
+   * after the machine's builder returns its spec, so context is
+   * always initialized by then. Reading `self.context` from a
+   * subscription callback registered in the builder body will
+   * throw a descriptive native Error if the callback fires
+   * synchronously at subscribe time (before the spec is returned).
+   * For that case, use `self.assign((ctx) => ...)`'s computed-patch
+   * form — it reads via its callback arg, which the runtime only
+   * invokes post-init.
+   */
   readonly context: Context;
 
-  /** Merge a patch into context via the event loop. */
-  assign(patch: Partial<Context>): Effect.Effect<void>;
+  /**
+   * Merge a patch into context via the event loop.
+   *
+   * Fails with `MachineUninitialized` if called before the
+   * machine's builder has returned its spec — happens when a
+   * subscription callback registered in the builder fires
+   * synchronously at subscribe time (a mirror subscription
+   * receiving an initial value, for example). Callers who don't
+   * care about early emits can `.pipe(Effect.ignore)` at the call
+   * site; callers who want to buffer can catchTag and retry.
+   */
+  assign(patch: Partial<Context>): Effect.Effect<void, MachineUninitialized>;
   /** Computed-patch form for when the new value depends on the old. */
-  assign(fn: (ctx: Context) => Partial<Context>): Effect.Effect<void>;
+  assign(
+    fn: (ctx: Context) => Partial<Context>,
+  ): Effect.Effect<void, MachineUninitialized>;
 
   /**
    * Put an event on this instance's queue. Silent no-op if the
    * current state has no handler. Used mainly by async external
    * event producers (stream `onChunk`, socket message handler,
    * `setInterval`) registered via `Effect.addFinalizer` in a state fn.
+   *
+   * Fails with `MachineUninitialized` if called before the builder
+   * has returned — same story as `assign`.
    */
   dispatch<K extends keyof Events & string>(
     event: K,
     ...args: PayloadArg<Events[K]>
-  ): Effect.Effect<void, MalformedSpec | TransitionLimit>;
+  ): Effect.Effect<
+    void,
+    MachineUninitialized | MalformedSpec | TransitionLimit
+  >;
 
   /**
    * Same as `dispatch`, but fails with `UnhandledEvent` when the
    * current state has no handler. Use when the caller knows the
    * machine should be able to handle the event — assertions in
    * tests, coordinated transitions where state was already checked.
+   *
+   * Also fails with `MachineUninitialized` if called before the
+   * builder has returned.
    */
   dispatchOrFail<K extends keyof Events & string>(
     event: K,
     ...args: PayloadArg<Events[K]>
-  ): Effect.Effect<void, UnhandledEvent | MalformedSpec | TransitionLimit>;
+  ): Effect.Effect<
+    void,
+    UnhandledEvent | MachineUninitialized | MalformedSpec | TransitionLimit
+  >;
 
   /**
    * Construct a transition to `name` with `payload`. Return the
@@ -192,11 +259,26 @@ export interface MachineSelf<States, Events, Context> {
 // =============================================================================
 
 /**
+ * Errors that a handler / state fn body can produce implicitly via
+ * calls to `self.assign` / `self.dispatch` / `self.dispatchOrFail`.
+ * Widened into `HandlerMap` / `StateFn` / `Spec`'s default `E`
+ * channel so callers don't have to pass generics explicitly when
+ * they use self methods.
+ */
+type SelfMethodErrors = MachineUninitialized | MalformedSpec | TransitionLimit;
+
+/**
  * Per-state handler map. Each key is an event name; each handler
  * takes the event's payload and returns an Effect that resolves to
  * a Transition (state change) or void (stay in this state).
+ *
+ * The `E` channel defaults to `SelfMethodErrors` so handlers that
+ * call `self.assign` / `self.dispatch` type-check without an
+ * explicit generic. Handlers that fail with additional error types
+ * add them to `E` at the call site; those propagate up through the
+ * spec and out through `dispatch` / `dispatchOrFail`.
  */
-export type HandlerMap<States, Events, E = never, R = never> = {
+export type HandlerMap<States, Events, E = SelfMethodErrors, R = never> = {
   [K in keyof Events]?: (
     payload: Events[K],
   ) => Effect.Effect<AnyTransition<States> | void, E, R>;
@@ -217,7 +299,7 @@ export type StateFn<
   K extends keyof States,
   States,
   Events,
-  E = never,
+  E = SelfMethodErrors,
   R = never,
 > = (
   payload: States[K],
@@ -237,7 +319,14 @@ export type StateFn<
  * maps every state name to its state fn; `on` is optional handlers
  * that fire in every state (unless a state overrides).
  */
-export interface Spec<States, Events, Context, Output, E = never, R = never> {
+export interface Spec<
+  States,
+  Events,
+  Context,
+  Output,
+  E = SelfMethodErrors,
+  R = never,
+> {
   readonly initial: keyof States & string;
   readonly context: Context;
   readonly output: (ctx: Context) => Output;

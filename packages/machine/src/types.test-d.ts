@@ -97,16 +97,24 @@ const _narrowed: "signedIn" = self.transition("signedIn", {
 // `self.assign(...)` — Context typing
 // =============================================================================
 
+// self.assign carries MachineUninitialized in its error channel —
+// a subscription callback registered in the builder could fire
+// synchronously before the runtime has finished initializing.
+// Callers who don't care about early emits `.pipe(Effect.ignore)`.
+type AssignFailures = import("./index.js").MachineUninitialized;
+
 // Partial patch — subset of context fields.
-const _a1: Effect.Effect<void> = self.assign({ user: null });
-const _a2: Effect.Effect<void> = self.assign({ lastLoginAt: 123 });
-const _a3: Effect.Effect<void> = self.assign({
+const _a1: Effect.Effect<void, AssignFailures> = self.assign({ user: null });
+const _a2: Effect.Effect<void, AssignFailures> = self.assign({
+  lastLoginAt: 123,
+});
+const _a3: Effect.Effect<void, AssignFailures> = self.assign({
   user: { id: "u1", name: "n" },
   lastLoginAt: Date.now(),
 });
 
-// Computed patch form.
-const _a4: Effect.Effect<void> = self.assign((ctx) => ({
+// Computed patch form — same error channel.
+const _a4: Effect.Effect<void, AssignFailures> = self.assign((ctx) => ({
   lastLoginAt: (ctx.lastLoginAt ?? 0) + 1,
 }));
 
@@ -127,12 +135,15 @@ self.context.bogus;
 // `self.dispatch` / `self.dispatchOrFail` — Event typing
 // =============================================================================
 
-// dispatch carries MalformedSpec | TransitionLimit in the error
-// channel — the machine can fail from within a handler if a bad
-// transition or infinite loop happens downstream. Callers who don't
-// want to handle these can `Effect.orDie` them.
+// dispatch carries MachineUninitialized | MalformedSpec |
+// TransitionLimit in the error channel. Uninitialized covers the
+// early-emit-in-builder case; the other two cover the machine
+// failing from within a handler (bad transition, infinite loop).
+// Callers who don't want to handle these can `Effect.orDie` them.
 type DispatchFailures =
-  import("./index.js").MalformedSpec | import("./index.js").TransitionLimit;
+  | AssignFailures
+  | import("./index.js").MalformedSpec
+  | import("./index.js").TransitionLimit;
 
 const _d1: Effect.Effect<void, DispatchFailures> = self.dispatch(
   "AUTHENTICATED",
