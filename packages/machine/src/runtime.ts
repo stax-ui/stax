@@ -31,12 +31,14 @@
  * - Global `on:` handler map (spec-level fallback handlers)
  */
 
-import { Effect, Exit, Scope } from "effect";
+import { Effect, Exit, Predicate, Scope } from "effect";
 
 import {
+  MachineUninitialized,
   MalformedSpec,
   NotImplemented,
   TransitionLimit,
+  TransitionTypeId,
   UnhandledEvent,
   type HandlerMap,
   type MachineHandle,
@@ -49,13 +51,9 @@ import {
 // Internal helpers
 // =============================================================================
 
-const TRANSITION_TAG = "@stax-ui/machine/Transition" as const;
-
 /** Duck-type check for a Transition value returned from a state fn / handler. */
 const isTransition = (value: unknown): value is Transition =>
-  typeof value === "object" &&
-  value !== null &&
-  (value as { _tag?: unknown })._tag === TRANSITION_TAG;
+  Predicate.hasProperty(value, TransitionTypeId);
 
 /** Reference-equality shallow-object equality for output projection. */
 const shallowEqual = (a: unknown, b: unknown): boolean => {
@@ -138,10 +136,14 @@ interface Runtime<States, Events, Context, Output> {
 export const createRuntime = <States, Events, Context, Output, R>(
   builder: (
     self: MachineSelf<States, Events, Context>,
-  ) => Effect.Effect<Spec<States, Events, Context, Output>, never, R>,
+  ) => Effect.Effect<
+    Spec<States, Events, Context, Output>,
+    MachineUninitialized,
+    R
+  >,
 ): Effect.Effect<
   MachineHandle<States, Events, Output>,
-  MalformedSpec | TransitionLimit,
+  MachineUninitialized | MalformedSpec | TransitionLimit,
   R | Scope.Scope
 > =>
   Effect.gen(function* () {
@@ -152,7 +154,26 @@ export const createRuntime = <States, Events, Context, Output, R>(
     // right after the builder returns.
     //
     // eslint-disable-next-line prefer-const
-    let runtime: Runtime<States, Events, Context, Output>;
+    let runtime: Runtime<States, Events, Context, Output> | null = null;
+
+    // Effect-returning self methods guard against being invoked
+    // before the builder has returned its spec — happens when a
+    // subscription registered during the builder fires
+    // synchronously. Uninit is surfaced as `MachineUninitialized`
+    // in the error channel rather than a native TypeError; callers
+    // pick a policy per-site (drop via Effect.ignore, buffer via
+    // catchTag, propagate, etc.).
+    const requireRuntime = (
+      operation: string,
+    ): Effect.Effect<
+      Runtime<States, Events, Context, Output>,
+      MachineUninitialized
+    > =>
+      Effect.suspend(() =>
+        runtime !== null
+          ? Effect.succeed(runtime)
+          : new MachineUninitialized({ operation }),
+      );
 
     // ---- self construction ----
     // Built as an unknown-typed struct then cast to the strict
@@ -160,17 +181,42 @@ export const createRuntime = <States, Events, Context, Output, R>(
     // have the machine's generics available at value time —
     // enforcement is via the interface, satisfied by shape.
     const self = {
+      // Synchronous getter: only valid inside state fns / handlers,
+      // where runtime is guaranteed initialized. Throws a
+      // descriptive native Error if invoked from a subscription
+      // callback that fires before the builder returns —
+      // documented pattern is to use `self.assign((ctx) => ...)`'s
+      // computed-patch form from callbacks instead (its callback
+      // arg is only invoked post-init).
       get context() {
+        if (runtime === null) {
+          throw new Error(
+            "@stax-ui/machine: self.context read before the machine's " +
+              "builder returned its spec. This usually means a " +
+              "subscription callback registered in the builder fired " +
+              "synchronously. Use `self.assign((ctx) => ...)`'s " +
+              "computed-patch form to read context from callbacks — " +
+              "its argument is only invoked once the machine is " +
+              "initialized.",
+          );
+        }
         return runtime.context;
       },
-      assign: (patchOrFn: unknown) => applyAssign(() => runtime, patchOrFn),
+      assign: (patchOrFn: unknown) =>
+        requireRuntime("assign").pipe(
+          Effect.flatMap((rt) => applyAssign(rt, patchOrFn)),
+        ),
       dispatch: (event: string, ...args: [] | [unknown]) =>
-        enqueue(() => runtime, event, args[0], /* orFail */ false),
+        requireRuntime("dispatch").pipe(
+          Effect.flatMap((rt) => enqueue(rt, event, args[0], false)),
+        ),
       dispatchOrFail: (event: string, ...args: [] | [unknown]) =>
-        enqueue(() => runtime, event, args[0], /* orFail */ true),
+        requireRuntime("dispatchOrFail").pipe(
+          Effect.flatMap((rt) => enqueue(rt, event, args[0], true)),
+        ),
       transition: (name: string, ...args: [] | [unknown]) =>
         ({
-          _tag: TRANSITION_TAG,
+          [TransitionTypeId]: TransitionTypeId,
           target: name,
           payload: args[0] ?? {},
         }) as Transition,
@@ -320,14 +366,12 @@ const enterStateRec = <States, Events, Context, Output>(
  * `UnhandledEvent`.
  */
 const enqueue = <States, Events, Context, Output>(
-  getRuntime: () => Runtime<States, Events, Context, Output>,
+  runtime: Runtime<States, Events, Context, Output>,
   event: string,
   payload: unknown,
   orFail: boolean,
 ): Effect.Effect<void, UnhandledEvent | MalformedSpec | TransitionLimit> =>
   Effect.gen(function* () {
-    const runtime = getRuntime();
-
     if (orFail) {
       // Strict variant: check right now whether we'd handle this.
       // If not, fail immediately without queuing.
@@ -411,11 +455,10 @@ const drainQueue = <States, Events, Context, Output>(
 // =============================================================================
 
 const applyAssign = <States, Events, Context, Output>(
-  getRuntime: () => Runtime<States, Events, Context, Output>,
+  runtime: Runtime<States, Events, Context, Output>,
   patchOrFn: unknown,
 ): Effect.Effect<void> =>
   Effect.sync(() => {
-    const runtime = getRuntime();
     const patch =
       typeof patchOrFn === "function"
         ? (patchOrFn as (ctx: Context) => Partial<Context>)(runtime.context)
@@ -535,9 +578,9 @@ const buildHandle = <States, Events, Context, Output>(
   runtime: Runtime<States, Events, Context, Output>,
 ): MachineHandle<States, Events, Output> => {
   const dispatchFn = (event: string, ...args: [] | [unknown]) =>
-    enqueue(() => runtime, event, args[0], false);
+    enqueue(runtime, event, args[0], false);
   const dispatchOrFailFn = (event: string, ...args: [] | [unknown]) =>
-    enqueue(() => runtime, event, args[0], true);
+    enqueue(runtime, event, args[0], true);
 
   const handle = {
     snapshot: () => runtime.currentOutput,

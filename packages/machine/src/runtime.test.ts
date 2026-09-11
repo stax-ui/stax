@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   Machine,
+  MachineUninitialized,
   MalformedSpec,
   TransitionLimit,
   UnhandledEvent,
@@ -401,6 +402,69 @@ describe("Machine runtime — Service", () => {
               if (err instanceof MalformedSpec) {
                 expect(err.state).toBe("bogus");
                 expect(err.reason).toContain("bogus");
+              }
+            }
+          }
+        }),
+      ),
+    );
+  });
+
+  it("self.assign called during builder (before spec is returned) fails with typed MachineUninitialized (not a native TypeError)", () => {
+    // Simulates the "subscription callback fires synchronously at
+    // subscribe time" scenario: a builder that yields self.assign
+    // before returning its spec — the runtime doesn't yet have
+    // context/output/etc. Instead of crashing with a native
+    // TypeError, self.assign fails with the typed error the caller
+    // can inspect.
+    interface EarlyStates {
+      idle: {};
+    }
+    interface EarlyContext {
+      value: number;
+    }
+    interface EarlyOutput {
+      value: number;
+    }
+    class Early extends Machine.Service<
+      Early,
+      EarlyStates,
+      {},
+      EarlyContext,
+      EarlyOutput,
+      never
+    >()("Early") {}
+
+    const layer = Machine.serviceLayer(Early, (self) =>
+      Effect.gen(function* () {
+        // Fire an assign BEFORE returning the spec — runtime is null.
+        yield* self.assign({ value: 42 });
+        return {
+          initial: "idle" as const,
+          context: { value: 0 },
+          output: (ctx: EarlyContext) => ({ value: ctx.value }),
+          states: { idle: () => Effect.succeed({}) },
+        };
+      }),
+    );
+
+    return Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const result = yield* Effect.exit(
+            Effect.gen(function* () {
+              yield* Early;
+            }).pipe(Effect.provide(layer)),
+          );
+          expect(Exit.isFailure(result)).toBe(true);
+          if (Exit.isFailure(result)) {
+            const failure = Cause.failureOption(result.cause);
+            expect(Option.isSome(failure)).toBe(true);
+            if (Option.isSome(failure)) {
+              const err = failure.value;
+              expect(err).toBeInstanceOf(MachineUninitialized);
+              if (err instanceof MachineUninitialized) {
+                expect(err.operation).toBe("assign");
               }
             }
           }

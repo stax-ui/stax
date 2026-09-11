@@ -41,6 +41,7 @@ import type * as ContextModule from "effect/Context";
 
 import { createRuntime } from "./runtime.js";
 import {
+  MachineUninitialized,
   MalformedSpec,
   NotImplemented,
   TransitionLimit,
@@ -67,6 +68,7 @@ export type {
 } from "./types.js";
 
 export {
+  MachineUninitialized,
   MalformedSpec,
   NotImplemented,
   TransitionLimit,
@@ -114,7 +116,11 @@ export interface ServiceClass<
   readonly [_context]?: Context;
   readonly [_output]?: Output;
   readonly [_deps]?: R;
-  Default?: Layer.Layer<Self, MalformedSpec | TransitionLimit, R>;
+  Default?: Layer.Layer<
+    Self,
+    MachineUninitialized | MalformedSpec | TransitionLimit,
+    R
+  >;
 }
 
 /**
@@ -238,8 +244,16 @@ export const serviceLayer = <Self, States, Events, Context, Output, R>(
   cls: ServiceClass<Self, States, Events, Context, Output, R>,
   builder: (
     self: MachineSelf<States, Events, Context>,
-  ) => Effect.Effect<Spec<States, Events, Context, Output>, never, R>,
-): Layer.Layer<Self, MalformedSpec | TransitionLimit, R> => {
+  ) => Effect.Effect<
+    Spec<States, Events, Context, Output>,
+    MachineUninitialized,
+    R
+  >,
+): Layer.Layer<
+  Self,
+  MachineUninitialized | MalformedSpec | TransitionLimit,
+  R
+> => {
   const tag = cls as unknown as Context.Tag<
     Self,
     MachineHandle<States, Events, Output>
