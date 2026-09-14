@@ -10,7 +10,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   Machine,
-  MachineUninitialized,
   MalformedSpec,
   TransitionLimit,
   UnhandledEvent,
@@ -57,29 +56,30 @@ class Counter extends Machine.Service<
   never
 >()("Counter") {}
 
-const CounterLayer = Machine.serviceLayer(Counter, (self) =>
+const CounterLayer = Machine.serviceLayer(
+  Counter,
   Effect.succeed({
     initial: "idle" as const,
     context: { count: 0 },
     output: (ctx: CounterContext) => ({
       count: ctx.count,
-      isFrozen: false, // overridden per-state below via state projection
+      isFrozen: false,
     }),
     on: {
-      RESET: () =>
+      RESET: (self) =>
         Effect.gen(function* () {
           yield* self.assign({ count: 0 });
           return self.transition("idle");
         }),
     },
     states: {
-      idle: () =>
+      idle: (self) =>
         Effect.succeed({
           INC: () => self.assign((ctx) => ({ count: ctx.count + 1 })),
           DEC: () => self.assign((ctx) => ({ count: ctx.count - 1 })),
           FREEZE: () => Effect.succeed(self.transition("frozen")),
         }),
-      frozen: () =>
+      frozen: (self) =>
         Effect.succeed({
           UNFREEZE: () => Effect.succeed(self.transition("idle")),
         }),
@@ -273,13 +273,14 @@ describe("Machine runtime — Service", () => {
       never
     >()("Batch") {}
 
-    const layer = Machine.serviceLayer(Batch, (self) =>
+    const layer = Machine.serviceLayer(
+      Batch,
       Effect.succeed({
         initial: "idle" as const,
         context: { a: 0, b: 0 },
         output: (ctx: BatchContext) => ({ a: ctx.a, b: ctx.b }),
         states: {
-          idle: () =>
+          idle: (self) =>
             Effect.succeed({
               BUMP: () =>
                 Effect.gen(function* () {
@@ -315,14 +316,15 @@ describe("Machine runtime — Service", () => {
       "Loop",
     ) {}
 
-    const layer = Machine.serviceLayer(Loop, (self) =>
+    const layer = Machine.serviceLayer(
+      Loop,
       Effect.succeed({
         initial: "a" as const,
         context: {},
         output: () => ({}),
         states: {
-          a: () => Effect.succeed(self.transition("b")),
-          b: () => Effect.succeed(self.transition("a")),
+          a: (self) => Effect.succeed(self.transition("b")),
+          b: (self) => Effect.succeed(self.transition("a")),
         },
       }),
     );
@@ -367,13 +369,14 @@ describe("Machine runtime — Service", () => {
       never
     >()("Bad") {}
 
-    const layer = Machine.serviceLayer(Bad, (self) =>
+    const layer = Machine.serviceLayer(
+      Bad,
       Effect.succeed({
         initial: "good" as const,
         context: {},
         output: () => ({}),
         states: {
-          good: () =>
+          good: (self) =>
             Effect.succeed({
               // Cast to sneak a bogus state name past the compiler.
               GO_BAD: () =>
@@ -410,66 +413,68 @@ describe("Machine runtime — Service", () => {
     );
   });
 
-  it("self.assign called during builder (before spec is returned) fails with typed MachineUninitialized (not a native TypeError)", () => {
-    // Simulates the "subscription callback fires synchronously at
-    // subscribe time" scenario: a builder that yields self.assign
-    // before returning its spec — the runtime doesn't yet have
-    // context/output/etc. Instead of crashing with a native
-    // TypeError, self.assign fails with the typed error the caller
-    // can inspect.
-    interface EarlyStates {
+  it("ready hook runs once after init with self available; scope-registered work lives for the machine's lifetime", () => {
+    // Verifies that `ready` fires post-init, receives self, and its
+    // Effect runs in the machine's parent scope — anything
+    // scope-registered (addFinalizer here) survives state
+    // transitions and only tears down when the machine's scope
+    // closes.
+    interface ReadyStates {
       idle: {};
     }
-    interface EarlyContext {
+    interface ReadyContext {
+      bootstrappedValue: number;
+    }
+    interface ReadyOutput {
       value: number;
     }
-    interface EarlyOutput {
-      value: number;
-    }
-    class Early extends Machine.Service<
-      Early,
-      EarlyStates,
+    class ReadyMachine extends Machine.Service<
+      ReadyMachine,
+      ReadyStates,
       {},
-      EarlyContext,
-      EarlyOutput,
+      ReadyContext,
+      ReadyOutput,
       never
-    >()("Early") {}
+    >()("ReadyMachine") {}
 
-    const layer = Machine.serviceLayer(Early, (self) =>
-      Effect.gen(function* () {
-        // Fire an assign BEFORE returning the spec — runtime is null.
-        yield* self.assign({ value: 42 });
-        return {
-          initial: "idle" as const,
-          context: { value: 0 },
-          output: (ctx: EarlyContext) => ({ value: ctx.value }),
-          states: { idle: () => Effect.succeed({}) },
-        };
+    let readyRan = 0;
+    let finalizerRan = 0;
+
+    const layer = Machine.serviceLayer(
+      ReadyMachine,
+      Effect.succeed({
+        initial: "idle" as const,
+        context: { bootstrappedValue: 0 },
+        output: (ctx: ReadyContext) => ({ value: ctx.bootstrappedValue }),
+        ready: (self) =>
+          Effect.gen(function* () {
+            readyRan++;
+            yield* self.assign({ bootstrappedValue: 99 });
+            yield* Effect.addFinalizer(() =>
+              Effect.sync(() => {
+                finalizerRan++;
+              }),
+            );
+          }),
+        states: { idle: () => Effect.succeed({}) },
       }),
     );
 
     return Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const result = yield* Effect.exit(
-            Effect.gen(function* () {
-              yield* Early;
-            }).pipe(Effect.provide(layer)),
-          );
-          expect(Exit.isFailure(result)).toBe(true);
-          if (Exit.isFailure(result)) {
-            const failure = Cause.failureOption(result.cause);
-            expect(Option.isSome(failure)).toBe(true);
-            if (Option.isSome(failure)) {
-              const err = failure.value;
-              expect(err).toBeInstanceOf(MachineUninitialized);
-              if (err instanceof MachineUninitialized) {
-                expect(err.operation).toBe("assign");
-              }
-            }
-          }
-        }),
+          const m = yield* ReadyMachine;
+          // ready fired exactly once, before we saw the handle.
+          expect(readyRan).toBe(1);
+          // Its assign is visible on the output.
+          expect(m.snapshot()).toEqual({ value: 99 });
+          // Finalizer registered under parent scope hasn't fired yet.
+          expect(finalizerRan).toBe(0);
+        }).pipe(Effect.provide(layer)),
       ),
-    );
+    ).then(() => {
+      // Scope closed at the end of Effect.scoped — finalizer runs.
+      expect(finalizerRan).toBe(1);
+    });
   });
 });
