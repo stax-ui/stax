@@ -478,3 +478,157 @@ describe("Machine runtime — Service", () => {
     });
   });
 });
+
+// -----------------------------------------------------------------------------
+// Factory machines — .spawn(args), per-instance state, caller-scoped lifetime.
+// -----------------------------------------------------------------------------
+
+interface CountUpStates {
+  idle: {};
+}
+interface CountUpEvents {
+  INC: {};
+}
+interface CountUpInputs {
+  start: number;
+}
+interface CountUpContext {
+  count: number;
+}
+interface CountUpOutput {
+  count: number;
+}
+
+class CountUp extends Machine.Factory<
+  CountUp,
+  CountUpStates,
+  CountUpEvents,
+  CountUpInputs,
+  CountUpContext,
+  CountUpOutput,
+  never
+>()("CountUp") {}
+
+const CountUpLayer = Machine.factoryLayer(
+  CountUp,
+  Effect.succeed({
+    spawn: ({ start }: CountUpInputs) =>
+      Effect.succeed({
+        initial: "idle" as const,
+        context: { count: start },
+        output: (ctx: CountUpContext) => ({ count: ctx.count }),
+        states: {
+          idle: (self) =>
+            Effect.succeed({
+              INC: () => self.assign((ctx) => ({ count: ctx.count + 1 })),
+            }),
+        },
+      }),
+  }),
+);
+
+describe("Machine runtime — Factory", () => {
+  it("spawn produces a handle whose initial context reflects the spawn args", () =>
+    runScoped(
+      Effect.gen(function* () {
+        const factory = yield* CountUp;
+        const counter = yield* factory.spawn({ start: 7 });
+        expect(counter.state()).toBe("idle");
+        expect(counter.snapshot().count).toBe(7);
+      }).pipe(Effect.provide(CountUpLayer)),
+    ));
+
+  it("two spawns from the same factory are independent instances", () =>
+    runScoped(
+      Effect.gen(function* () {
+        const factory = yield* CountUp;
+        const a = yield* factory.spawn({ start: 0 });
+        const b = yield* factory.spawn({ start: 100 });
+
+        yield* a.dispatch("INC");
+        yield* a.dispatch("INC");
+        yield* b.dispatch("INC");
+
+        expect(a.snapshot().count).toBe(2);
+        expect(b.snapshot().count).toBe(101);
+      }).pipe(Effect.provide(CountUpLayer)),
+    ));
+
+  it("instance lifetime is tied to the caller's Scope (per-instance ready + finalizer)", () => {
+    // Same shape as the Service ready-hook test, but per-instance:
+    // each spawn's `ready` runs once, its finalizer tears down when
+    // the *spawn's* scope closes — not the layer's.
+    interface EphStates {
+      idle: {};
+    }
+    interface EphInputs {
+      tag: string;
+    }
+    class Ephemeral extends Machine.Factory<
+      Ephemeral,
+      EphStates,
+      {},
+      EphInputs,
+      { tag: string },
+      { tag: string },
+      never
+    >()("Ephemeral") {}
+
+    let readyRuns = 0;
+    const finalized: string[] = [];
+
+    const layer = Machine.factoryLayer(
+      Ephemeral,
+      Effect.succeed({
+        spawn: ({ tag }: EphInputs) =>
+          Effect.succeed({
+            initial: "idle" as const,
+            context: { tag },
+            output: (ctx: { tag: string }) => ({ tag: ctx.tag }),
+            ready: (_self) =>
+              Effect.gen(function* () {
+                readyRuns++;
+                yield* Effect.addFinalizer(() =>
+                  Effect.sync(() => {
+                    finalized.push(tag);
+                  }),
+                );
+              }),
+            states: { idle: () => Effect.succeed({}) },
+          }),
+      }),
+    );
+
+    return Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const factory = yield* Ephemeral;
+
+          // Spawn "a" in a nested scope; it should die when that
+          // scope closes, even though the outer scope (holding the
+          // layer + factory) is still open.
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const a = yield* factory.spawn({ tag: "a" });
+              expect(a.snapshot().tag).toBe("a");
+              expect(readyRuns).toBe(1);
+              expect(finalized).toEqual([]);
+            }),
+          );
+          // Inner scope closed → a's finalizer fired.
+          expect(finalized).toEqual(["a"]);
+
+          // Spawn "b" in the outer scope — survives until the outer
+          // Effect.scoped closes below.
+          const b = yield* factory.spawn({ tag: "b" });
+          expect(b.snapshot().tag).toBe("b");
+          expect(readyRuns).toBe(2);
+          expect(finalized).toEqual(["a"]);
+        }).pipe(Effect.provide(layer)),
+      ),
+    ).then(() => {
+      // Outer scope closed → b's finalizer fired.
+      expect(finalized).toEqual(["a", "b"]);
+    });
+  });
+});

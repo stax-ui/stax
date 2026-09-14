@@ -420,10 +420,17 @@ export interface MachineHandle<States, Events, Output> {
 
 /**
  * What a Factory's Layer provides. `spawn` produces a fresh
- * `MachineHandle` per call, scoped to the caller's Scope.
+ * `MachineHandle` per call, scoped to the caller's Scope. Failure
+ * channel mirrors `Machine.serviceLayer`'s — the same runtime
+ * failure modes (`MalformedSpec` from a bad transition target,
+ * `TransitionLimit` from a runaway reentry) apply per instance.
  */
 export interface MachineFactory<States, Events, Inputs, Output> {
   spawn(
     args: Inputs,
-  ): Effect.Effect<MachineHandle<States, Events, Output>, never, Scope.Scope>;
+  ): Effect.Effect<
+    MachineHandle<States, Events, Output>,
+    MalformedSpec | TransitionLimit,
+    Scope.Scope
+  >;
 }
