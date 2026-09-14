@@ -31,7 +31,7 @@
  * - Global `on:` handler map (spec-level fallback handlers)
  */
 
-import { Effect, Exit, Predicate, Scope } from "effect";
+import { Effect, Exit, Predicate, Record, Scope } from "effect";
 
 import {
   MalformedSpec,
@@ -192,9 +192,9 @@ export const createRuntime = <States, Events, Context, Output, R>(
       },
       assign: (patchOrFn: unknown) => applyAssign(runtime, patchOrFn),
       dispatch: (event: string, ...args: [] | [unknown]) =>
-        enqueue(runtime, event, args[0], /* orFail */ false),
+        enqueue(runtime, event, args[0]),
       dispatchOrFail: (event: string, ...args: [] | [unknown]) =>
-        enqueue(runtime, event, args[0], /* orFail */ true),
+        enqueue(runtime, event, args[0], "fail"),
       transition: (name: string, ...args: [] | [unknown]) =>
         ({
           [TransitionTypeId]: TransitionTypeId,
@@ -209,20 +209,15 @@ export const createRuntime = <States, Events, Context, Output, R>(
       onExit: (effect: Effect.Effect<void>) =>
         Effect.addFinalizer(() => effect),
     } as unknown as MachineSelf<States, Events, Context>;
+
     runtime.self = self;
 
     // Run the `ready` hook if provided, in the machine's parent
     // scope so anything scope-registered lives for the machine's
     // whole lifetime.
     if (spec.ready) {
-      const readyEffect = (
-        spec.ready as (
-          s: MachineSelf<States, Events, Context>,
-        ) => Effect.Effect<void, unknown, Scope.Scope>
-      )(self);
-      yield* readyEffect.pipe(
-        Effect.provideService(Scope.Scope, parentScope),
-      ) as Effect.Effect<void, MalformedSpec | TransitionLimit>;
+      const readyEffect = spec.ready(self);
+      yield* readyEffect.pipe(Effect.provideService(Scope.Scope, parentScope));
     }
 
     // Enter the initial state synchronously so consumers hold a
@@ -273,6 +268,16 @@ const enterStateRec = <States, Events, Context, Output>(
     // Clear handlers — new state hasn't installed its map yet.
     runtime.handlers = null;
 
+    // Locate the state fn.
+    const stateFn = runtime.spec.states[name as keyof States];
+
+    if (!stateFn) {
+      return yield* new MalformedSpec({
+        reason: `state machine has no state named "${name}"`,
+        state: name,
+      });
+    }
+
     // Enter the new state.
     runtime.currentState = name;
     runtime.currentPayload = payload;
@@ -282,27 +287,11 @@ const enterStateRec = <States, Events, Context, Output>(
     const stateScope = yield* Scope.make();
     runtime.stateScope = stateScope;
 
-    // Locate the state fn.
-    const stateFn = (
-      runtime.spec.states as Record<
-        string,
-        (
-          self: MachineSelf<States, Events, Context>,
-          payload: unknown,
-        ) => Effect.Effect<unknown>
-      >
-    )[name];
-    if (!stateFn) {
-      return yield* new MalformedSpec({
-        reason: `state machine has no state named "${name}"`,
-        state: name,
-      });
-    }
-
     // Run the state fn in the state's scope, passing self.
-    const result = yield* stateFn(runtime.self, payload).pipe(
-      Effect.provideService(Scope.Scope, stateScope),
-    );
+    const result = yield* stateFn(
+      runtime.self,
+      payload as States[keyof States],
+    ).pipe(Effect.provideService(Scope.Scope, stateScope));
 
     // Interpret the return value.
     if (isTransition(result)) {
@@ -344,15 +333,11 @@ const enqueue = <States, Events, Context, Output>(
   runtime: Runtime<States, Events, Context, Output>,
   event: string,
   payload: unknown,
-  orFail: boolean,
+  mode: "ignore" | "fail" = "ignore",
 ): Effect.Effect<void, UnhandledEvent | MalformedSpec | TransitionLimit> =>
   Effect.gen(function* () {
-    if (orFail) {
-      // Strict variant: check right now whether we'd handle this.
-      // If not, fail immediately without queuing.
-      const handler = runtime.handlers?.[event as never] as
-        ((payload: unknown) => Effect.Effect<unknown>) | undefined;
-      if (!handler) {
+    if (mode === "fail") {
+      if (!runtime.handlers || !Record.has(runtime.handlers, event as never)) {
         return yield* new UnhandledEvent({
           event,
           state: runtime.currentState,
@@ -379,17 +364,20 @@ const enqueue = <States, Events, Context, Output>(
 const drainQueue = <States, Events, Context, Output>(
   runtime: Runtime<States, Events, Context, Output>,
 ): Effect.Effect<void, MalformedSpec | TransitionLimit> =>
-  Effect.gen(function* () {
-    if (runtime.isProcessing) return;
+  Effect.suspend(() => {
+    if (runtime.isProcessing) return Effect.void;
+
     runtime.isProcessing = true;
 
-    try {
+    return Effect.gen(function* () {
       while (runtime.eventQueue.length > 0 && runtime.handlers) {
         const next = runtime.eventQueue.shift();
+
         if (!next) break;
-        const handler = (runtime.handlers as Record<string, unknown> | null)?.[
-          next.event
-        ] as ((payload: unknown) => Effect.Effect<unknown>) | undefined;
+
+        const handler = runtime.handlers?.[next.event as keyof Events] as
+          ((payload: unknown) => Effect.Effect<unknown>) | undefined;
+
         if (!handler) {
           // Current state has no handler for this specific event —
           // drop it (silent dispatch semantics; strict callers used
@@ -411,7 +399,9 @@ const drainQueue = <States, Events, Context, Output>(
         if (isTransition(result)) {
           // Transition mid-drain — release the processing flag so
           // enterStateRec can re-enter drainQueue cleanly after the
-          // new state's handlers install.
+          // new state's handlers install. (The ensuring below would
+          // also clear it after enterStateRec returns; clearing early
+          // is what lets the recursive drain proceed.)
           runtime.isProcessing = false;
           yield* enterStateRec(runtime, result.target, result.payload, 0, [
             runtime.currentState,
@@ -420,9 +410,13 @@ const drainQueue = <States, Events, Context, Output>(
         }
         // Non-transition returns keep us in the current state; loop continues.
       }
-    } finally {
-      runtime.isProcessing = false;
-    }
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          runtime.isProcessing = false;
+        }),
+      ),
+    );
   });
 
 // =============================================================================
@@ -438,6 +432,7 @@ const applyAssign = <States, Events, Context, Output>(
       typeof patchOrFn === "function"
         ? (patchOrFn as (ctx: Context) => Partial<Context>)(runtime.context)
         : (patchOrFn as Partial<Context>);
+
     runtime.context = { ...runtime.context, ...patch };
 
     if (runtime.isProcessing) {
@@ -460,7 +455,9 @@ const notifyOutput = <States, Events, Context, Output>(
   newOutput: Output,
 ): void => {
   const oldOutput = runtime.currentOutput;
+
   if (shallowEqual(oldOutput, newOutput)) return;
+
   runtime.currentOutput = newOutput;
 
   for (const sub of runtime.subOutput) {
@@ -474,7 +471,9 @@ const notifyOutput = <States, Events, Context, Output>(
   for (const [field, subs] of runtime.subOutputField) {
     const oldValue = (oldOutput as Record<string, unknown>)[field];
     const newValue = (newOutput as Record<string, unknown>)[field];
+
     if (Object.is(oldValue, newValue)) continue;
+
     for (const sub of subs) {
       try {
         sub(newValue);
@@ -496,7 +495,9 @@ const notifyState = <States, Events, Context, Output>(
       /* swallow */
     }
   }
+
   const inStateSubs = runtime.subInState.get(name);
+
   if (inStateSubs) {
     for (const sub of inStateSubs) {
       try {
@@ -521,6 +522,7 @@ const notifyHandlersChanged = <States, Events, Context, Output>(
   // canDispatch subscribers — fire per-event.
   for (const [event, subs] of runtime.subCanDispatch) {
     const canNow = handlers?.[event] != null;
+
     for (const sub of subs) {
       try {
         sub(canNow);
@@ -535,6 +537,7 @@ const notifyHandlersChanged = <States, Events, Context, Output>(
     const events = handlers
       ? (Object.keys(handlers) as ReadonlyArray<string>)
       : ([] as ReadonlyArray<string>);
+
     for (const sub of runtime.subAvailableEvents) {
       try {
         sub(events);
@@ -552,11 +555,6 @@ const notifyHandlersChanged = <States, Events, Context, Output>(
 const buildHandle = <States, Events, Context, Output>(
   runtime: Runtime<States, Events, Context, Output>,
 ): MachineHandle<States, Events, Output> => {
-  const dispatchFn = (event: string, ...args: [] | [unknown]) =>
-    enqueue(runtime, event, args[0], false);
-  const dispatchOrFailFn = (event: string, ...args: [] | [unknown]) =>
-    enqueue(runtime, event, args[0], true);
-
   const handle = {
     snapshot: () => runtime.currentOutput,
     state: () => runtime.currentState,
@@ -668,8 +666,10 @@ const buildHandle = <States, Events, Context, Output>(
         new NotImplemented({ feature: "subscribeAvailableEventsEffect" }),
       ),
 
-    dispatch: dispatchFn,
-    dispatchOrFail: dispatchOrFailFn,
+    dispatch: (event: string, ...args: [] | [unknown]) =>
+      enqueue(runtime, event, args[0]),
+    dispatchOrFail: (event: string, ...args: [] | [unknown]) =>
+      enqueue(runtime, event, args[0], "fail"),
 
     awaitState: (_name: string) =>
       Effect.fail(new NotImplemented({ feature: "awaitState" })),
