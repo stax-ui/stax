@@ -15,6 +15,11 @@
  *   with an `Effect<Spec>` builder (services yielded in the outer
  *   Effect; `self` is passed to state fns / handlers / `ready` at
  *   invocation time — never in scope in the builder itself)
+ * - `Machine.Factory` (instanced machines) + `Machine.factoryLayer`
+ *   with an `Effect<{ spawn }>` builder — outer Effect yields shared
+ *   services once; `spawn(args): Effect<Spec, never, Scope>` runs per
+ *   instance and returns a fresh `MachineHandle` scoped to the
+ *   caller's Scope
  * - `self.context` / `self.assign` / `self.dispatch` /
  *   `self.dispatchOrFail` / `self.transition` / `self.onExit`
  * - `ready: (self) => Effect<void, E, R | Scope>` hook for
@@ -33,7 +38,6 @@
  *   `subscribeInState` — callback-based
  *
  * Not yet:
- * - `Machine.Factory` + `Machine.factoryLayer` + `.spawn(args)`
  * - `self.transitionAwait` (register/go primitive)
  * - `awaitState` (external coordination)
  * - `subscribeEffect` / `subscribeToEffect` / etc. — Effect-flavored
@@ -45,10 +49,9 @@
 import { Context, Effect, Layer, type Scope } from "effect";
 import type * as ContextModule from "effect/Context";
 
-import { createRuntime } from "./runtime.js";
+import { createFactoryRuntime, createRuntime } from "./runtime.js";
 import {
   MalformedSpec,
-  NotImplemented,
   TransitionLimit,
   type MachineFactory,
   type MachineHandle,
@@ -148,7 +151,7 @@ export interface FactoryClass<
   readonly [_context]?: Context;
   readonly [_output]?: Output;
   readonly [_deps]?: R;
-  Default?: Layer.Layer<Self, NotImplemented, R>;
+  Default?: Layer.Layer<Self, never, R>;
 }
 
 /**
@@ -265,15 +268,38 @@ export const serviceLayer = <Self, States, Events, Context, Output, R>(
 };
 
 /**
- * Layer constructor for a Factory machine. **Not implemented in this
- * commit.** Will build a `MachineFactory` whose `.spawn(args)` runs
- * per instance and returns a fresh `MachineHandle`.
+ * Layer constructor for a Factory machine. The outer builder is an
+ * `Effect<{ spawn }, never, R>` — it yields shared services once at
+ * layer-construction time and returns a `spawn(args)` function.
+ * `.spawn(args)` is called per instance and returns an
+ * `Effect<Spec, never, Scope>` for that instance; the runtime wraps
+ * it into a fresh `MachineHandle` scoped to whatever scope the
+ * caller of `.spawn(args)` provides.
  *
- * Same shape story as `serviceLayer`: the outer builder Effect
- * yields shared services once at layer-construction time, and
- * `spawn(args)` returns an `Effect<Spec>` per instance. `self` is
- * never in scope in either Effect — it's handed to state fns,
- * `on:` handlers, and the per-instance `ready` hook by the runtime.
+ * Same "no `self` in outer scope" story as `serviceLayer`: neither
+ * the outer builder nor the per-instance spawn Effect ever sees
+ * `self` — it's handed to state fns, `on:` handlers, and `ready`
+ * at invocation time.
+ *
+ * ```ts
+ * ConversationMachine.Default = Machine.factoryLayer(
+ *   ConversationMachine,
+ *   Effect.gen(function* () {
+ *     const conversationApi = yield* ConversationAPI;
+ *     return {
+ *       spawn: ({ initialId }) =>
+ *         Effect.gen(function* () {
+ *           return {
+ *             initial: "idle",
+ *             context: { conversationId: initialId ?? null },
+ *             output: (ctx) => ({ conversationId: ctx.conversationId }),
+ *             states: { ... },
+ *           };
+ *         }),
+ *     };
+ *   }),
+ * );
+ * ```
  */
 export const factoryLayer = <Self, States, Events, Inputs, Context, Output, R>(
   cls: FactoryClass<Self, States, Events, Inputs, Context, Output, R>,
@@ -290,21 +316,14 @@ export const factoryLayer = <Self, States, Events, Inputs, Context, Output, R>(
     never,
     R
   >,
-): Layer.Layer<Self, NotImplemented, R> => {
+): Layer.Layer<Self, never, R> => {
   const tag = cls as unknown as Context.Tag<
     Self,
     MachineFactory<States, Events, Inputs, Output>
   >;
-  return Layer.scoped(
+  return Layer.effect(
     tag,
-    Effect.gen(function* () {
-      // Consume `builder` at the type level so its generics stay bound;
-      // real wiring in the follow-up commit.
-      void builder;
-      return yield* Effect.fail(
-        new NotImplemented({ feature: "Machine.factoryLayer" }),
-      );
-    }),
+    createFactoryRuntime<States, Events, Inputs, Context, Output, R>(builder),
   );
 };
 

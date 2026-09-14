@@ -40,6 +40,7 @@ import {
   TransitionTypeId,
   UnhandledEvent,
   type HandlerMap,
+  type MachineFactory,
   type MachineHandle,
   type MachineSelf,
   type Spec,
@@ -151,11 +152,84 @@ export const createRuntime = <States, Events, Context, Output, R>(
 > =>
   Effect.gen(function* () {
     const parentScope = yield* Effect.scope;
-
     // Build the spec first — no `self` involved, so no
     // initialization race possible by construction.
     const spec = yield* builder;
+    return yield* instantiateMachine(spec, parentScope);
+  });
 
+/**
+ * Construct a Factory machine's runtime from a builder. Returns a
+ * `MachineFactory` whose `.spawn(args)` produces a fresh instance
+ * scoped to the caller's Scope. Called by `Machine.factoryLayer`
+ * to produce the service value.
+ *
+ * The outer builder runs once at layer-construction time and yields
+ * services shared across every instance the factory produces. The
+ * per-instance `spawn(args): Effect<Spec>` runs on each call to
+ * `.spawn` and produces the instance's spec. Same "no self in
+ * outer scope" story as `createRuntime` — `self` is handed to
+ * state fns, `on:` handlers, and `ready` at invocation time.
+ */
+export const createFactoryRuntime = <
+  States,
+  Events,
+  Inputs,
+  Context,
+  Output,
+  R,
+>(
+  builder: Effect.Effect<
+    {
+      spawn: (
+        args: Inputs,
+      ) => Effect.Effect<
+        Spec<States, Events, Context, Output>,
+        never,
+        Scope.Scope
+      >;
+    },
+    never,
+    R
+  >,
+): Effect.Effect<MachineFactory<States, Events, Inputs, Output>, never, R> =>
+  Effect.gen(function* () {
+    const { spawn } = yield* builder;
+    return {
+      spawn: (args: Inputs) =>
+        Effect.gen(function* () {
+          // The caller's Scope becomes the instance's parent scope —
+          // `ready`-registered work, mirror subscriptions, and any
+          // spawn-time Scope-registered work live for the instance's
+          // lifetime (i.e., until the caller's scope closes).
+          const callerScope = yield* Effect.scope;
+          const spec = yield* spawn(args);
+          return yield* instantiateMachine(spec, callerScope);
+        }),
+    };
+  });
+
+// =============================================================================
+// Shared instantiation
+// =============================================================================
+
+/**
+ * Stand up a runtime from a fully-built spec. Shared between Service
+ * (one instance per layer) and Factory (one instance per `.spawn`).
+ *
+ * The caller is responsible for having yielded whatever builder
+ * Effect produced the spec, and for passing the parent scope the
+ * instance should be tied to — for Service, that's the layer's
+ * scope; for Factory, that's the caller's scope at `.spawn` time.
+ */
+const instantiateMachine = <States, Events, Context, Output>(
+  spec: Spec<States, Events, Context, Output>,
+  parentScope: Scope.Scope,
+): Effect.Effect<
+  MachineHandle<States, Events, Output>,
+  MalformedSpec | TransitionLimit
+> =>
+  Effect.gen(function* () {
     // ---- Runtime init ----
     // Two-step: allocate with a placeholder `self` so `self`
     // itself can close over `runtime` (their references are
@@ -221,7 +295,7 @@ export const createRuntime = <States, Events, Context, Output, R>(
     }
 
     // Enter the initial state synchronously so consumers hold a
-    // fully-ready handle when `createRuntime` returns. If the initial
+    // fully-ready handle when instantiation returns. If the initial
     // state is a task state that immediately transitions, we settle
     // through the chain here; if it installs handlers, they're
     // installed by the time dispatch calls arrive.
