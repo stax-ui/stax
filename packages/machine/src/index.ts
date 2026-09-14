@@ -12,8 +12,14 @@
  * First-pass runtime landed. Covered:
  *
  * - `Machine.Service` (singleton machines) + `Machine.serviceLayer`
+ *   with an `Effect<Spec>` builder (services yielded in the outer
+ *   Effect; `self` is passed to state fns / handlers / `ready` at
+ *   invocation time — never in scope in the builder itself)
  * - `self.context` / `self.assign` / `self.dispatch` /
  *   `self.dispatchOrFail` / `self.transition` / `self.onExit`
+ * - `ready: (self) => Effect<void, E, R | Scope>` hook for
+ *   machine-lifetime setup (mirror subscriptions, long-lived
+ *   forks) that needs `self` but has to outlive any single state
  * - Context store with per-handler batching (subscribers see one
  *   atomic notification per event)
  * - Event queue with per-machine mutex (FIFO, serial)
@@ -46,7 +52,6 @@ import {
   TransitionLimit,
   type MachineFactory,
   type MachineHandle,
-  type MachineSelf,
   type Spec,
 } from "./types.js";
 
@@ -215,21 +220,31 @@ export const Factory =
 // =============================================================================
 
 /**
- * Layer constructor for a Service machine. The builder receives
- * `self` (typed against the class's generics) and returns an Effect
- * that resolves to the spec.
+ * Layer constructor for a Service machine. The builder is a plain
+ * `Effect<Spec, never, R>` — yield services in the outer Effect and
+ * return the spec. `self` is NOT in scope here; it's handed to each
+ * state fn as `(self, payload)`, to each spec-level `on:` handler
+ * as `(self, payload)`, and to the `ready` hook as `(self)`. That
+ * placement makes `MachineUninitialized` unrepresentable by
+ * construction — `self` can't even be named before init.
  *
  * ```ts
  * SessionMachine.Default = Machine.serviceLayer(
  *   SessionMachine,
- *   (self) => Effect.gen(function* () {
+ *   Effect.gen(function* () {
  *     const authAPI = yield* AuthAPI;
  *     return {
  *       initial: "booting",
  *       context: { user: null },
  *       output: (ctx) => ({ user: ctx.user }),
- *       on: { ... },
- *       states: { ... },
+ *       on: { SIGN_OUT: (self) => self.assign({ user: null }) },
+ *       ready: (self) => authAPI.subscribeToken((t) =>
+ *         self.assign({ token: t }),
+ *       ),
+ *       states: {
+ *         booting: (self, _) => Effect.succeed(self.transition("signedOut")),
+ *         // ...
+ *       },
  *     };
  *   }),
  * );
@@ -253,6 +268,12 @@ export const serviceLayer = <Self, States, Events, Context, Output, R>(
  * Layer constructor for a Factory machine. **Not implemented in this
  * commit.** Will build a `MachineFactory` whose `.spawn(args)` runs
  * per instance and returns a fresh `MachineHandle`.
+ *
+ * Same shape story as `serviceLayer`: the outer builder Effect
+ * yields shared services once at layer-construction time, and
+ * `spawn(args)` returns an `Effect<Spec>` per instance. `self` is
+ * never in scope in either Effect — it's handed to state fns,
+ * `on:` handlers, and the per-instance `ready` hook by the runtime.
  */
 export const factoryLayer = <Self, States, Events, Inputs, Context, Output, R>(
   cls: FactoryClass<Self, States, Events, Inputs, Context, Output, R>,
@@ -260,7 +281,6 @@ export const factoryLayer = <Self, States, Events, Inputs, Context, Output, R>(
     {
       spawn: (
         args: Inputs,
-        self: MachineSelf<States, Events, Context>,
       ) => Effect.Effect<
         Spec<States, Events, Context, Output>,
         never,
