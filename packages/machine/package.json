@@ -1,0 +1,45 @@
+{
+  "name": "@stax-ui/machine",
+  "version": "0.0.0",
+  "description": "Framework-neutral state machines for Effect — declarative reducers with typed events, per-state payloads, and reactive snapshot/subscribe outputs",
+  "type": "module",
+  "license": "MPL-2.0",
+  "private": true,
+  "publishConfig": {
+    "access": "public"
+  },
+  "author": "Jon Laing",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/stax-ui/stax.git",
+    "directory": "packages/machine"
+  },
+  "keywords": [
+    "effect",
+    "effect-ts",
+    "state-machine",
+    "reducer",
+    "xstate"
+  ],
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsup"
+  },
+  "peerDependencies": {
+    "effect": "^3.0.0"
+  }
+}
