@@ -97,24 +97,21 @@ const _narrowed: "signedIn" = self.transition("signedIn", {
 // `self.assign(...)` — Context typing
 // =============================================================================
 
-// self.assign carries MachineUninitialized in its error channel —
-// a subscription callback registered in the builder could fire
-// synchronously before the runtime has finished initializing.
-// Callers who don't care about early emits `.pipe(Effect.ignore)`.
-type AssignFailures = import("./index.js").MachineUninitialized;
+// self.assign has an empty error channel — self is only handed to
+// runtime-invoked callbacks (state fns, handlers, `ready`), which
+// only run post-init. The MachineUninitialized case is
+// unreachable by construction, so it doesn't pollute the type.
 
 // Partial patch — subset of context fields.
-const _a1: Effect.Effect<void, AssignFailures> = self.assign({ user: null });
-const _a2: Effect.Effect<void, AssignFailures> = self.assign({
-  lastLoginAt: 123,
-});
-const _a3: Effect.Effect<void, AssignFailures> = self.assign({
+const _a1: Effect.Effect<void> = self.assign({ user: null });
+const _a2: Effect.Effect<void> = self.assign({ lastLoginAt: 123 });
+const _a3: Effect.Effect<void> = self.assign({
   user: { id: "u1", name: "n" },
   lastLoginAt: Date.now(),
 });
 
 // Computed patch form — same error channel.
-const _a4: Effect.Effect<void, AssignFailures> = self.assign((ctx) => ({
+const _a4: Effect.Effect<void> = self.assign((ctx) => ({
   lastLoginAt: (ctx.lastLoginAt ?? 0) + 1,
 }));
 
@@ -135,15 +132,12 @@ self.context.bogus;
 // `self.dispatch` / `self.dispatchOrFail` — Event typing
 // =============================================================================
 
-// dispatch carries MachineUninitialized | MalformedSpec |
-// TransitionLimit in the error channel. Uninitialized covers the
-// early-emit-in-builder case; the other two cover the machine
-// failing from within a handler (bad transition, infinite loop).
-// Callers who don't want to handle these can `Effect.orDie` them.
+// dispatch carries MalformedSpec | TransitionLimit — the machine
+// can fail from within a handler if a bad transition or infinite
+// loop happens downstream. Callers who don't want to handle these
+// can `Effect.orDie` them.
 type DispatchFailures =
-  | AssignFailures
-  | import("./index.js").MalformedSpec
-  | import("./index.js").TransitionLimit;
+  import("./index.js").MalformedSpec | import("./index.js").TransitionLimit;
 
 const _d1: Effect.Effect<void, DispatchFailures> = self.dispatch(
   "AUTHENTICATED",
@@ -240,19 +234,23 @@ const _spec: Spec<SessionStates, SessionEvents, SessionContext, SessionOutput> =
     initial: "booting",
     context: { user: null, lastLoginAt: null },
     output: (ctx) => ({ user: ctx.user }),
+    // Global `on` handlers take (self, payload) — no state fn to
+    // close over here.
     on: {
-      SIGN_OUT: () =>
+      SIGN_OUT: (self) =>
         Effect.gen(function* () {
           yield* self.assign({ user: null });
           return self.transition("signedOut");
         }),
     },
     states: {
-      booting: (_) =>
+      // State fns take (self, payload). Handlers inside a state fn
+      // close over the state fn's self — they only receive payload.
+      booting: (self, _) =>
         Effect.gen(function* () {
           return self.transition("signedOut");
         }),
-      signedOut: (_) =>
+      signedOut: (self, _) =>
         Effect.succeed({
           AUTHENTICATED: ({ user }: { user: User }) =>
             Effect.gen(function* () {
@@ -260,7 +258,7 @@ const _spec: Spec<SessionStates, SessionEvents, SessionContext, SessionOutput> =
               return self.transition("signedIn", { user });
             }),
         }),
-      signedIn: ({ user: _u }) =>
+      signedIn: (self, { user: _u }) =>
         Effect.succeed({
           EXPIRE: () =>
             Effect.gen(function* () {
@@ -268,7 +266,7 @@ const _spec: Spec<SessionStates, SessionEvents, SessionContext, SessionOutput> =
               return self.transition("expired");
             }),
         }),
-      expired: (_) =>
+      expired: (self, _) =>
         Effect.succeed({
           AUTHENTICATED: ({ user }: { user: User }) =>
             Effect.gen(function* () {

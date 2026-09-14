@@ -34,7 +34,6 @@
 import { Effect, Exit, Predicate, Scope } from "effect";
 
 import {
-  MachineUninitialized,
   MalformedSpec,
   NotImplemented,
   TransitionLimit,
@@ -98,6 +97,12 @@ interface Runtime<States, Events, Context, Output> {
   // Machine identity + spec
   readonly spec: Spec<States, Events, Context, Output>;
 
+  // The `self` handle for this runtime — passed to state fns,
+  // handlers, `ready`, and any callback the runtime invokes.
+  // Populated immediately after runtime init (so it can reference
+  // `runtime` in its closures).
+  self: MachineSelf<States, Events, Context>;
+
   // Live state
   currentState: string;
   currentPayload: unknown;
@@ -132,109 +137,32 @@ interface Runtime<States, Events, Context, Output> {
  * Construct a Service machine's runtime from a builder. Returns a
  * `MachineHandle` scoped to the caller's Scope. Called by
  * `Machine.serviceLayer` to produce the service value.
+ *
+ * The builder is an `Effect<Spec>` — no `self` in scope. Everything
+ * `self`-touching (state fns, handlers, `ready`) receives `self`
+ * from the runtime at invocation time, post-init.
  */
 export const createRuntime = <States, Events, Context, Output, R>(
-  builder: (
-    self: MachineSelf<States, Events, Context>,
-  ) => Effect.Effect<
-    Spec<States, Events, Context, Output>,
-    MachineUninitialized,
-    R
-  >,
+  builder: Effect.Effect<Spec<States, Events, Context, Output>, never, R>,
 ): Effect.Effect<
   MachineHandle<States, Events, Output>,
-  MachineUninitialized | MalformedSpec | TransitionLimit,
+  MalformedSpec | TransitionLimit,
   R | Scope.Scope
 > =>
   Effect.gen(function* () {
     const parentScope = yield* Effect.scope;
 
-    // `runtime` is created up front with placeholder spec/context/output
-    // so `self` can close over it. spec/context/output get patched in
-    // right after the builder returns.
-    //
-    // eslint-disable-next-line prefer-const
-    let runtime: Runtime<States, Events, Context, Output> | null = null;
-
-    // Effect-returning self methods guard against being invoked
-    // before the builder has returned its spec — happens when a
-    // subscription registered during the builder fires
-    // synchronously. Uninit is surfaced as `MachineUninitialized`
-    // in the error channel rather than a native TypeError; callers
-    // pick a policy per-site (drop via Effect.ignore, buffer via
-    // catchTag, propagate, etc.).
-    const requireRuntime = (
-      operation: string,
-    ): Effect.Effect<
-      Runtime<States, Events, Context, Output>,
-      MachineUninitialized
-    > =>
-      Effect.suspend(() =>
-        runtime !== null
-          ? Effect.succeed(runtime)
-          : new MachineUninitialized({ operation }),
-      );
-
-    // ---- self construction ----
-    // Built as an unknown-typed struct then cast to the strict
-    // MachineSelf interface at the boundary. The runtime doesn't
-    // have the machine's generics available at value time —
-    // enforcement is via the interface, satisfied by shape.
-    const self = {
-      // Synchronous getter: only valid inside state fns / handlers,
-      // where runtime is guaranteed initialized. Throws a
-      // descriptive native Error if invoked from a subscription
-      // callback that fires before the builder returns —
-      // documented pattern is to use `self.assign((ctx) => ...)`'s
-      // computed-patch form from callbacks instead (its callback
-      // arg is only invoked post-init).
-      get context() {
-        if (runtime === null) {
-          throw new Error(
-            "@stax-ui/machine: self.context read before the machine's " +
-              "builder returned its spec. This usually means a " +
-              "subscription callback registered in the builder fired " +
-              "synchronously. Use `self.assign((ctx) => ...)`'s " +
-              "computed-patch form to read context from callbacks — " +
-              "its argument is only invoked once the machine is " +
-              "initialized.",
-          );
-        }
-        return runtime.context;
-      },
-      assign: (patchOrFn: unknown) =>
-        requireRuntime("assign").pipe(
-          Effect.flatMap((rt) => applyAssign(rt, patchOrFn)),
-        ),
-      dispatch: (event: string, ...args: [] | [unknown]) =>
-        requireRuntime("dispatch").pipe(
-          Effect.flatMap((rt) => enqueue(rt, event, args[0], false)),
-        ),
-      dispatchOrFail: (event: string, ...args: [] | [unknown]) =>
-        requireRuntime("dispatchOrFail").pipe(
-          Effect.flatMap((rt) => enqueue(rt, event, args[0], true)),
-        ),
-      transition: (name: string, ...args: [] | [unknown]) =>
-        ({
-          [TransitionTypeId]: TransitionTypeId,
-          target: name,
-          payload: args[0] ?? {},
-        }) as Transition,
-      transitionAwait: (
-        _register: (go: () => void) => () => void,
-        _name: string,
-        ..._args: [] | [unknown]
-      ) => Effect.fail(new NotImplemented({ feature: "self.transitionAwait" })),
-      onExit: (effect: Effect.Effect<void>) =>
-        Effect.addFinalizer(() => effect),
-    } as unknown as MachineSelf<States, Events, Context>;
-
-    // Build the spec via the user's builder Effect.
-    const spec = yield* builder(self);
+    // Build the spec first — no `self` involved, so no
+    // initialization race possible by construction.
+    const spec = yield* builder;
 
     // ---- Runtime init ----
-    runtime = {
+    // Two-step: allocate with a placeholder `self` so `self`
+    // itself can close over `runtime` (their references are
+    // mutually cyclic). Patch in the real `self` below.
+    const runtime: Runtime<States, Events, Context, Output> = {
       spec,
+      self: null as unknown as MachineSelf<States, Events, Context>,
       currentState: spec.initial,
       currentPayload: {},
       context: spec.context,
@@ -252,6 +180,50 @@ export const createRuntime = <States, Events, Context, Output, R>(
       subCanDispatch: new Map(),
       subAvailableEvents: new Set(),
     };
+
+    // ---- self construction — post-init, so no guards needed ----
+    // Built as an unknown-typed struct then cast to the strict
+    // MachineSelf interface at the boundary. The runtime doesn't
+    // have the machine's generics available at value time —
+    // enforcement is via the interface, satisfied by shape.
+    const self = {
+      get context() {
+        return runtime.context;
+      },
+      assign: (patchOrFn: unknown) => applyAssign(runtime, patchOrFn),
+      dispatch: (event: string, ...args: [] | [unknown]) =>
+        enqueue(runtime, event, args[0], /* orFail */ false),
+      dispatchOrFail: (event: string, ...args: [] | [unknown]) =>
+        enqueue(runtime, event, args[0], /* orFail */ true),
+      transition: (name: string, ...args: [] | [unknown]) =>
+        ({
+          [TransitionTypeId]: TransitionTypeId,
+          target: name,
+          payload: args[0] ?? {},
+        }) as Transition,
+      transitionAwait: (
+        _register: (go: () => void) => () => void,
+        _name: string,
+        ..._args: [] | [unknown]
+      ) => Effect.fail(new NotImplemented({ feature: "self.transitionAwait" })),
+      onExit: (effect: Effect.Effect<void>) =>
+        Effect.addFinalizer(() => effect),
+    } as unknown as MachineSelf<States, Events, Context>;
+    runtime.self = self;
+
+    // Run the `ready` hook if provided, in the machine's parent
+    // scope so anything scope-registered lives for the machine's
+    // whole lifetime.
+    if (spec.ready) {
+      const readyEffect = (
+        spec.ready as (
+          s: MachineSelf<States, Events, Context>,
+        ) => Effect.Effect<void, unknown, Scope.Scope>
+      )(self);
+      yield* readyEffect.pipe(
+        Effect.provideService(Scope.Scope, parentScope),
+      ) as Effect.Effect<void, MalformedSpec | TransitionLimit>;
+    }
 
     // Enter the initial state synchronously so consumers hold a
     // fully-ready handle when `createRuntime` returns. If the initial
@@ -314,7 +286,10 @@ const enterStateRec = <States, Events, Context, Output>(
     const stateFn = (
       runtime.spec.states as Record<
         string,
-        (payload: unknown) => Effect.Effect<unknown>
+        (
+          self: MachineSelf<States, Events, Context>,
+          payload: unknown,
+        ) => Effect.Effect<unknown>
       >
     )[name];
     if (!stateFn) {
@@ -324,8 +299,8 @@ const enterStateRec = <States, Events, Context, Output>(
       });
     }
 
-    // Run the state fn in the state's scope.
-    const result = yield* stateFn(payload).pipe(
+    // Run the state fn in the state's scope, passing self.
+    const result = yield* stateFn(runtime.self, payload).pipe(
       Effect.provideService(Scope.Scope, stateScope),
     );
 
