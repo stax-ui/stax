@@ -614,7 +614,13 @@ describe("Hydration", () => {
 
       container.innerHTML = await Effect.runPromise(renderToString(App()));
       await hydrate(App(), container);
-      await new Promise((r) => setTimeout(r, 30));
+      // 100ms rather than 30ms (the shape used by the sibling tests):
+      // this test's animation is group-coordinated (`group: g0` +
+      // Animation.sequence(1)), which schedules onBeforeEnter through
+      // extra fiber steps. 30ms was passing locally but not under CI
+      // load; 100ms leaves ~3x headroom over what onBeforeEnter has
+      // needed in observed runs.
+      await new Promise((r) => setTimeout(r, 100));
       expect(snapshots.length).toBe(1);
       expect(snapshots[0]).toContain("opacity-0");
       expect(snapshots[0]).toContain("-rotate-45");
@@ -622,9 +628,9 @@ describe("Hydration", () => {
 
       // Toggle away and back — the route-navigation shape.
       await Effect.runPromise(visibleSignal!.set(false));
-      await new Promise((r) => setTimeout(r, 10));
+      await new Promise((r) => setTimeout(r, 20));
       await Effect.runPromise(visibleSignal!.set(true));
-      await new Promise((r) => setTimeout(r, 30));
+      await new Promise((r) => setTimeout(r, 100));
 
       expect(snapshots.length).toBe(2);
       expect(snapshots[1]).toContain("opacity-0");

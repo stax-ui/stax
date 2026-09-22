@@ -293,6 +293,117 @@ describe("Control", () => {
     );
   });
 
+  // Key-indexing invariants: what changed when `each` moved its per-slot
+  // lookup from `arr.find` (O(n) per slot, O(n²) per sync) to a
+  // key→item Map built once per sync via ReconcileConfig.prepare.
+  describe("each — key indexing", () => {
+    it.scopedLive(
+      "duplicate keys resolve to the first occurrence (regression guard)",
+      () =>
+        Effect.gen(function* () {
+          // Two items share a key — `Array.prototype.find` semantics
+          // pick the FIRST. Locked in so a future rewrite that reaches
+          // for `new Map(arr.map(...))` (which would keep the LAST)
+          // doesn't silently drift.
+          const items = yield* Signal.make([
+            { id: "a", name: "First" },
+            { id: "a", name: "Second" },
+            { id: "b", name: "Third" },
+          ]);
+
+          const el = yield* each(items, {
+            key: (item) => item.id,
+            render: (item, _index) =>
+              $.li({}, $.of(Readable.map(item, (i) => i.name))),
+          });
+
+          // Two slots (deduped on key); "a" resolves to "First".
+          expect(el.children.length).toBe(2);
+          expect(el.children[0].textContent).toBe("First");
+          expect(el.children[1].textContent).toBe("Third");
+        }).pipe(Effect.provide(TestLayer)),
+    );
+
+    it.scopedLive(
+      "config.key invocation count is O(n) per sync, not O(n²)",
+      () =>
+        Effect.gen(function* () {
+          const n = 20;
+          const initial = Array.from({ length: n }, (_, i) => ({
+            id: String(i),
+          }));
+          const items = yield* Signal.make(initial);
+
+          let keyCalls = 0;
+          const key = (item: { id: string }) => {
+            keyCalls++;
+            return item.id;
+          };
+
+          yield* each(items, {
+            key,
+            render: () => $.li(),
+          });
+
+          // Let the initial sync settle, then reset the counter — we're
+          // measuring the update-triggered sync in isolation.
+          yield* Effect.sleep("20 millis");
+          keyCalls = 0;
+
+          // A full reorder — every slot is "existing", every slot goes
+          // through the getItemForKey path.
+          yield* items.set([...initial].reverse());
+          yield* Effect.sleep("20 millis");
+
+          // Post-fix: getTargetKeys walks the array (n calls), prepare
+          // walks it again (n calls). Pre-fix: the same n, plus
+          // arr.find scanning ~n(n+1)/2 times ≈ 210 for n=20.
+          expect(keyCalls).toBeLessThanOrEqual(2 * n + 5);
+        }).pipe(Effect.provide(TestLayer)),
+    );
+
+    it.scopedLive(
+      "SignalArray-driven each reflects in-place mutations (identity-cache regression guard)",
+      () =>
+        Effect.gen(function* () {
+          // SignalArray's mutation methods mutate the backing array in
+          // place and re-emit the SAME reference. If `each` ever caches
+          // its key→item index keyed on array identity, this test
+          // renders the wrong item at position 2 (or fails to add
+          // position 3 on push).
+          const items = yield* Signal.Array.make([
+            { id: "1", name: "Alice" },
+            { id: "2", name: "Bob" },
+            { id: "3", name: "Charlie" },
+          ]);
+
+          const el = yield* each(items, {
+            key: (item) => item.id,
+            render: (item, _index) =>
+              $.li({}, $.of(Readable.map(item, (i) => i.name))),
+          });
+
+          expect(el.children.length).toBe(3);
+          expect(el.children[2].textContent).toBe("Charlie");
+
+          yield* Effect.sleep("20 millis");
+
+          // In-place replaceAt — arr identity unchanged.
+          yield* items.replaceAt(2, { id: "3", name: "Chuck" });
+          yield* Effect.sleep("20 millis");
+
+          expect(el.children[2].textContent).toBe("Chuck");
+
+          // In-place push — arr identity unchanged, new slot appears.
+          yield* items.push({ id: "4", name: "Dave" });
+          yield* Effect.sleep("20 millis");
+
+          expect(el.children.length).toBe(4);
+          expect(el.children[3].textContent).toBe("Dave");
+        }).pipe(Effect.provide(TestLayer)),
+    );
+  });
+
   // FLIP reorder animation. jsdom has no layout engine, so we stub
   // `getBoundingClientRect` to report position based on each row's
   // current DOM index — the reorder itself is what makes rects change,

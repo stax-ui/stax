@@ -27,8 +27,28 @@ export interface ReconcileConfig<A, E = never, R = never> {
     value: A,
     ctx: { item: Signal.Signal<unknown>; index: Signal.Signal<number> },
   ) => Element<unknown, E, R>;
-  /** Get the item value for a given key (used by `each`) */
-  readonly getItemForKey?: (key: string, value: A) => unknown;
+  /**
+   * Optional per-sync precomputation. Called exactly once at the start of
+   * each sync; the result is threaded into every `getItemForKey` call for
+   * that sync and then discarded.
+   *
+   * Exists so `each` can build a key→item index once per update instead of
+   * scanning the list per slot. Deliberately NOT cached across syncs:
+   * `SignalArray` mutates its backing array in place and re-emits the same
+   * reference, so any identity-keyed memo would go stale and mis-render.
+   */
+  readonly prepare?: (value: A) => unknown;
+  /**
+   * Get the item value for a given key (used by `each`). Receives the
+   * result of the optional `prepare` hook — for `each`, that's a
+   * `Map<string, A>` built once per sync, turning per-slot lookup from
+   * O(n) into O(1).
+   */
+  readonly getItemForKey?: (
+    key: string,
+    value: A,
+    prepared: unknown,
+  ) => unknown;
   /** Whether slot order matters (true for `each`) */
   readonly ordered?: boolean;
 }
@@ -68,6 +88,11 @@ export const reconcile = <A, E, R>(
         const currentKeys = yield* ctx.getSlotKeys();
         const targetKeys = config.getTargetKeys(value);
         const targetSet = new Set(targetKeys);
+        // Per-sync precomputation (see ReconcileConfig.prepare). Runs
+        // exactly once, before any slot lookups, and threads through
+        // getItemForKey. `undefined` when unused — the existing guards
+        // on getItemForKey below are unchanged.
+        const prepared = config.prepare?.(value);
 
         yield* logDebug("reconcile sync", "stax.reconcile", {
           value,
@@ -97,7 +122,9 @@ export const reconcile = <A, E, R>(
           if (existing) {
             // Update existing slot's reactive values
             if (existing.item && config.getItemForKey) {
-              yield* existing.item.set(config.getItemForKey(key, value));
+              yield* existing.item.set(
+                config.getItemForKey(key, value, prepared),
+              );
             }
             if (existing.index) {
               yield* existing.index.set(i);
@@ -108,7 +135,7 @@ export const reconcile = <A, E, R>(
             }
           } else {
             // Create new slot
-            const itemValue = config.getItemForKey?.(key, value);
+            const itemValue = config.getItemForKey?.(key, value, prepared);
             yield* ctx.addSlot(
               key,
               ({ item, index }) =>
@@ -382,7 +409,23 @@ export const each = <A, E = never, R = never>(
         ctx.item as Readable.Readable<A>,
         ctx.index as Readable.Readable<number>,
       ),
-    getItemForKey: (key, arr) => arr.find((item) => config.key(item) === key),
+    // Build a key→item index once per sync, then look up in O(1) per slot.
+    // Without this, `getItemForKey` was a linear scan (`arr.find`) called
+    // once per slot per sync, making `each` O(n²) in list length.
+    prepare: (arr) => {
+      const index = new Map<string, A>();
+      for (const item of arr) {
+        const k = config.key(item);
+        // First occurrence wins — preserves `Array.prototype.find`
+        // semantics exactly when keys collide. `new Map(arr.map(…))`
+        // would keep the LAST and silently change behaviour for
+        // duplicate-key lists.
+        if (!index.has(k)) index.set(k, item);
+      }
+      return index;
+    },
+    getItemForKey: (key, _arr, prepared) =>
+      (prepared as Map<string, A> | undefined)?.get(key),
     ordered: true,
   });
 
