@@ -1,6 +1,6 @@
 {
   "name": "create-stax-ui",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "Create a new Stax application",
   "type": "module",
   "license": "MPL-2.0",

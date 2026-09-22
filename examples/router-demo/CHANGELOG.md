@@ -1,5 +1,16 @@
 # router-demo
 
+## 0.0.12
+
+### Patch Changes
+
+- Updated dependencies [4cffac7]
+- Updated dependencies [f2b4ee0]
+- Updated dependencies [4cffac7]
+  - @stax-ui/core@0.7.0
+  - @stax-ui/dom@0.9.2
+  - @stax-ui/router@0.5.2
+
 ## 0.0.11
 
 ### Patch Changes
