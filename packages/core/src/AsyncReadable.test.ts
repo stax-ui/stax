@@ -1,4 +1,4 @@
-import { Effect, Option, Scope } from "effect";
+import { Effect, Option, Schedule, Scope } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { AsyncReadable } from "./AsyncReadable.js";
@@ -7,33 +7,83 @@ import { Signal } from "./Signal.js";
 const runTest = <A>(effect: Effect.Effect<A, never, Scope.Scope>): Promise<A> =>
   Effect.runPromise(Effect.scoped(effect));
 
+// Wait for the AsyncReadable's initial (or refetch) fetch to settle.
+// `make` no longer suspends its caller — the initial fetch runs in a
+// forked fiber — so tests reading `value`/`error` after construction
+// must first give that fiber a chance to run and flip isLoading back
+// to false. Polls with a Schedule so the wait is bounded by settlement,
+// not a fixed sleep.
+const settle = <A, E>(ar: AsyncReadable<A, E>): Effect.Effect<void> =>
+  ar.isLoading.get.pipe(
+    Effect.repeat({
+      while: (loading) => loading,
+      schedule: Schedule.spaced("1 millis"),
+    }),
+    Effect.timeout("1 second"),
+    Effect.asVoid,
+    Effect.orDie,
+  );
+
 describe("AsyncReadable", () => {
   describe("make", () => {
+    it("returns the handle synchronously without suspending on the initial fetch", () =>
+      runTest(
+        Effect.gen(function* () {
+          let fetchStarted = false;
+          let fetchCompleted = false;
+          const ar = yield* AsyncReadable.make(() =>
+            Effect.gen(function* () {
+              fetchStarted = true;
+              // Yield so the parent Effect sees the pre-settlement state
+              // before we complete.
+              yield* Effect.sleep(0);
+              fetchCompleted = true;
+              return 42;
+            }),
+          );
+
+          // Handle is available immediately; fetch hasn't completed yet.
+          expect(fetchCompleted).toBe(false);
+          expect(yield* ar.isLoading.get).toBe(true);
+          expect(Option.isNone(yield* ar.value.get)).toBe(true);
+
+          yield* settle(ar);
+
+          expect(fetchStarted).toBe(true);
+          expect(fetchCompleted).toBe(true);
+          expect(yield* ar.isLoading.get).toBe(false);
+          expect(Option.getOrThrow(yield* ar.value.get)).toBe(42);
+        }),
+      ));
+
     it("should create with initial fetched value", () =>
       runTest(
         Effect.gen(function* () {
           const ar = yield* AsyncReadable.make(() => Effect.succeed(42));
 
+          yield* settle(ar);
           const value = yield* ar.value.get;
           expect(Option.getOrThrow(value)).toBe(42);
         }),
       ));
 
-    it("should start with isLoading false after initial fetch", () =>
+    it("should end with isLoading false after initial fetch", () =>
       runTest(
         Effect.gen(function* () {
           const ar = yield* AsyncReadable.make(() => Effect.succeed(42));
 
+          yield* settle(ar);
           const isLoading = yield* ar.isLoading.get;
           expect(isLoading).toBe(false);
         }),
       ));
 
-    it("should start with no error on success", () =>
+    it("should end with no error on success", () =>
       runTest(
         Effect.gen(function* () {
           const ar = yield* AsyncReadable.make(() => Effect.succeed(42));
 
+          yield* settle(ar);
           const error = yield* ar.error.get;
           expect(Option.isNone(error)).toBe(true);
         }),
@@ -46,6 +96,7 @@ describe("AsyncReadable", () => {
             Effect.fail("fetch failed" as const),
           );
 
+          yield* settle(ar);
           const error = yield* ar.error.get;
           expect(Option.getOrThrow(error)).toBe("fetch failed");
         }),
@@ -58,6 +109,7 @@ describe("AsyncReadable", () => {
             Effect.fail("fetch failed"),
           );
 
+          yield* settle(ar);
           const value = yield* ar.value.get;
           expect(Option.isNone(value)).toBe(true);
         }),
@@ -73,6 +125,7 @@ describe("AsyncReadable", () => {
             Effect.sync(() => ++counter),
           );
 
+          yield* settle(ar);
           const value1 = yield* ar.value.get;
           expect(Option.getOrThrow(value1)).toBe(1);
 
@@ -91,6 +144,7 @@ describe("AsyncReadable", () => {
             shouldFail ? Effect.fail("error") : Effect.succeed(42),
           );
 
+          yield* settle(ar);
           // Initially has error
           const error1 = yield* ar.error.get;
           expect(Option.isSome(error1)).toBe(true);
@@ -115,7 +169,8 @@ describe("AsyncReadable", () => {
         Effect.gen(function* () {
           const ar = yield* AsyncReadable.make(() => Effect.succeed(42));
 
-          // Has value after creation
+          yield* settle(ar);
+          // Has value after settlement
           const value1 = yield* ar.value.get;
           expect(Option.isSome(value1)).toBe(true);
 
@@ -138,6 +193,7 @@ describe("AsyncReadable", () => {
         Effect.gen(function* () {
           const ar = yield* AsyncReadable.make(() => Effect.fail("error"));
 
+          yield* settle(ar);
           // Has error
           const error1 = yield* ar.error.get;
           expect(Option.isSome(error1)).toBe(true);
@@ -158,6 +214,7 @@ describe("AsyncReadable", () => {
         Effect.gen(function* () {
           const ar = yield* AsyncReadable.promise(() => Promise.resolve(42));
 
+          yield* settle(ar);
           const value = yield* ar.value.get;
           expect(Option.getOrThrow(value)).toBe(42);
         }),
@@ -173,6 +230,7 @@ describe("AsyncReadable", () => {
             (e) => `caught: ${(e as Error).message}`,
           );
 
+          yield* settle(ar);
           const error = yield* ar.error.get;
           expect(Option.getOrThrow(error)).toBe("caught: oops");
         }),
@@ -180,6 +238,30 @@ describe("AsyncReadable", () => {
   });
 
   describe("fromReadable", () => {
+    it("returns the handle synchronously without suspending on the initial computation", () =>
+      runTest(
+        Effect.gen(function* () {
+          const count = yield* Signal.make(5);
+          let computationCompleted = false;
+          const ar = yield* AsyncReadable.fromReadable(count, (n) =>
+            Effect.gen(function* () {
+              yield* Effect.sleep(0);
+              computationCompleted = true;
+              return n * 2;
+            }),
+          );
+
+          expect(computationCompleted).toBe(false);
+          expect(yield* ar.isLoading.get).toBe(true);
+          expect(Option.isNone(yield* ar.value.get)).toBe(true);
+
+          yield* settle(ar);
+
+          expect(computationCompleted).toBe(true);
+          expect(Option.getOrThrow(yield* ar.value.get)).toBe(10);
+        }),
+      ));
+
     it("should compute from a readable value", () =>
       runTest(
         Effect.gen(function* () {
@@ -188,6 +270,7 @@ describe("AsyncReadable", () => {
             Effect.succeed(n * 2),
           );
 
+          yield* settle(ar);
           const value = yield* ar.value.get;
           expect(Option.getOrThrow(value)).toBe(10);
         }),
@@ -201,6 +284,7 @@ describe("AsyncReadable", () => {
             Effect.succeed(n * 2),
           );
 
+          yield* settle(ar);
           // Initial value
           const value1 = yield* ar.value.get;
           expect(Option.getOrThrow(value1)).toBe(10);
@@ -222,6 +306,7 @@ describe("AsyncReadable", () => {
             AsyncReadable.fromReadable((n) => Effect.succeed(n * 2)),
           );
 
+          yield* settle(ar);
           const value = yield* ar.value.get;
           expect(Option.getOrThrow(value)).toBe(10);
         }),
@@ -235,6 +320,7 @@ describe("AsyncReadable", () => {
             fail ? Effect.fail("computation failed") : Effect.succeed(42),
           );
 
+          yield* settle(ar);
           const error = yield* ar.error.get;
           expect(Option.getOrThrow(error)).toBe("computation failed");
         }),
@@ -248,6 +334,7 @@ describe("AsyncReadable", () => {
             fail ? Effect.fail("error") : Effect.succeed(42),
           );
 
+          yield* settle(ar);
           // Initially has error
           const error1 = yield* ar.error.get;
           expect(Option.isSome(error1)).toBe(true);
@@ -275,17 +362,19 @@ describe("AsyncReadable", () => {
           );
           const mapped = ar.pipe(AsyncReadable.map((user) => user.name));
 
+          yield* settle(ar);
           const value = yield* mapped.value.get;
           expect(Option.getOrThrow(value)).toBe("Alice");
         }),
       ));
 
-    it("should preserve isLoading state", () =>
+    it("should preserve isLoading state after settlement", () =>
       runTest(
         Effect.gen(function* () {
           const ar = yield* AsyncReadable.make(() => Effect.succeed(42));
           const mapped = ar.pipe(AsyncReadable.map((n) => n * 2));
 
+          yield* settle(ar);
           const isLoading = yield* mapped.isLoading.get;
           expect(isLoading).toBe(false);
         }),
@@ -299,6 +388,7 @@ describe("AsyncReadable", () => {
           );
           const mapped = ar.pipe(AsyncReadable.map((n: number) => n * 2));
 
+          yield* settle(ar);
           const error = yield* mapped.error.get;
           expect(Option.getOrThrow(error)).toBe("error");
         }),
@@ -313,6 +403,7 @@ describe("AsyncReadable", () => {
           );
           const mapped = ar.pipe(AsyncReadable.map((n) => n * 10));
 
+          yield* settle(ar);
           const value1 = yield* mapped.value.get;
           expect(Option.getOrThrow(value1)).toBe(10);
 

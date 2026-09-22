@@ -98,7 +98,15 @@ export interface AsyncReadable<A, E = never> extends Pipeable.Pipeable {
 
 /**
  * Create an AsyncReadable from an Effect-returning fetch function.
- * Automatically fetches on creation.
+ * Returns the handle synchronously; the initial fetch runs in the
+ * background under the caller's scope.
+ *
+ * On construction the handle reads `isLoading = true`, `value = None`,
+ * `error = None`. When the fetch settles, `isLoading` flips to `false`
+ * and either `value` or `error` fills in. Consumers can subscribe to
+ * `isLoading` for a loading indicator or wrap the whole thing in
+ * `Boundary.suspense` when a blocking UX is wanted — the split between
+ * "observable loading" and "suspending" is deliberate.
  *
  * @param fetch - Effect-returning function to fetch the value
  *
@@ -136,8 +144,22 @@ export const make = <A, E = never, R = never>(
         yield* isLoadingSignal.set(false);
       });
 
-    // Run initial fetch
-    yield* runFetch();
+    // Flip isLoading synchronously in the outer scope so consumers
+    // reading it on the very next line (or in a subscribe callback
+    // wired up right after make() returns) see the loading state.
+    // Without this, there's a small window between make() returning
+    // and the forked fetch's first line running where isLoading is
+    // still its initial false — long enough for a first render to
+    // miss the loading UI.
+    yield* isLoadingSignal.set(true);
+
+    // Kick off the initial fetch in the background — do NOT suspend
+    // the caller. Suspending would block the component tree above the
+    // creator until the request settles, which (a) makes `isLoading`
+    // unobservable on first load and (b) can silently desync sibling
+    // animation gates (see docs/STAX-ASYNCREADABLE-SUSPEND.md). Use
+    // Boundary.suspense at the call site when a blocking UX is wanted.
+    yield* Effect.forkScoped(runFetch());
 
     const resetEffect = (): Effect.Effect<void> =>
       Effect.gen(function* () {
@@ -269,9 +291,14 @@ const fromReadableImpl = <A, B, E, R>(
         yield* isLoadingSignal.set(false);
       });
 
-    // Run initial computation
+    // Kick off the initial computation in the background — same
+    // rationale as `make`: never suspend the caller on the first
+    // computation. `isLoading` is observable from the moment the
+    // handle is returned (flipped synchronously below, before the
+    // fork's first line has a chance to run).
     const initialValue = yield* self.get;
-    yield* runComputation(initialValue);
+    yield* isLoadingSignal.set(true);
+    yield* Effect.forkScoped(runComputation(initialValue));
 
     // Subscribe to changes and recompute
     const changesStream = self.changes.pipe(
