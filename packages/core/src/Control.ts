@@ -425,7 +425,7 @@ export const each = <A, E = never, R = never>(
       return index;
     },
     getItemForKey: (key, _arr, prepared) =>
-      (prepared as Map<string, A>).get(key),
+      (prepared as Map<string, A> | undefined)?.get(key),
     ordered: true,
   });
 
