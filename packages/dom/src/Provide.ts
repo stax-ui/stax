@@ -1,13 +1,18 @@
 import { Context, Effect } from "effect";
 
-import type { Child } from "./Element/types.js";
-
 /**
  * Provide a context value to children elements.
  * Similar to React's Context.Provider pattern.
  *
  * Supports partial context provision - if children require multiple contexts,
  * providing one will satisfy that requirement and leave the rest.
+ *
+ * Shape-preserving: whatever the caller hands in comes back out with the same
+ * success type. Passing a single `Element<HTMLButtonElement>` yields
+ * `Element<HTMLButtonElement>` (context removed from R); passing a `Child`
+ * (e.g., the result of `collect(...)`) yields a `Child`. A previous version
+ * narrowed everything to `Child`, which dropped element-specific types for
+ * single-child callers.
  *
  * @param tag - The Effect Context tag
  * @param value - The value to provide
@@ -36,8 +41,9 @@ import type { Child } from "./Element/types.js";
  * provide(AccordionItemCtx, itemCtx, ThemedButton({}))
  * ```
  */
-export const provide = <I, S, E, R>(
+export const provide = <A, E, R, I, S>(
   tag: Context.Tag<I, S>,
   value: S,
-  children: Child<E, R>,
-): Child<E, Exclude<R, I>> => children.pipe(Effect.provideService(tag, value));
+  children: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E, Exclude<R, I>> =>
+  children.pipe(Effect.provideService(tag, value));
