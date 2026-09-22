@@ -1,250 +1,916 @@
-# Effex
+# Stax
 
-A reactive UI framework built on Effect.ts primitives. Uses signals for state, derived values for computations, and represents DOM elements as Effects with automatic scope management.
-
-## Installation
-
-```bash
-# For SPA (client-only)
-pnpm add @effex/dom @effex/router effect
-
-# For SSR (full-stack)
-pnpm add @effex/platform effect
-```
-
-## Core Concepts
-
-### Signals - Reactive State
-```ts
-const count = yield* Signal.make(0)
-yield* count.get              // read: 0
-yield* count.set(5)           // write
-yield* count.update(n => n+1) // update
-count.map(n => n * 2)         // derive a Readable
-```
-
-### Derived - Computed Values
-```ts
-// Synchronous
-const doubled = yield* Derived.sync([count], ([n]) => n * 2)
-
-// Asynchronous (with loading/error states)
-const user = yield* Derived.async([userId], ([id]) => fetchUser(id))
-```
-
-### Elements - DOM as Effects
-
-Use the `$` namespace for all HTML elements:
-
-```ts
-import { $ } from "@effex/dom"
-
-// Elements are Effect<HTMLElement, E, Scope>
-$.div({ class: "container" }, [
-  $.h1("Hello"),
-  $.p(count),  // Reactive - updates when count changes
-  $.button({ onClick: () => count.update(n => n + 1) }, "+"),
-])
-```
-
-### Components
-```ts
-const Counter: Component.Unit = () =>
-  Effect.gen(function* () {
-    const count = yield* Signal.make(0)
-    return yield* $.div([
-      $.button({ onClick: () => count.update(n => n - 1) }, "-"),
-      $.span(count),
-      $.button({ onClick: () => count.update(n => n + 1) }, "+"),
-    ])
-  })
-```
-
-### Control Flow
-```ts
-// Conditional rendering
-when(isLoggedIn, {
-  onTrue: () => Dashboard(),
-  onFalse: () => LoginForm(),
-})
-
-// Pattern matching
-match(status, {
-  cases: [
-    { pattern: "loading", render: () => Spinner() },
-    { pattern: "error", render: () => ErrorMessage() },
-    { pattern: "success", render: () => Content() },
-  ],
-  fallback: () => $.div("Unknown"),
-})
-
-// Lists with keyed updates
-each(todos, {
-  container: () => $.ul({ class: "todo-list" }),
-  key: todo => todo.id,
-  render: (todoReadable) => TodoItem({ todo: todoReadable }),
-})
-```
-
-### Error Handling
-```ts
-// Elements can have error channels: Element<E>
-const riskyComponent: Element<FetchError> = Effect.gen(function* () {
-  const data = yield* fetchData()  // may fail
-  return yield* $.div(data.message)
-})
-
-// Handle errors before mounting
-const safeComponent = Boundary.error(
-  () => riskyComponent,
-  (error) => $.div(["Error: ", String(error)])
-)
-
-// mount() requires Element<never> - all errors must be handled
-yield* mount(safeComponent, document.getElementById("root")!)
-```
-
-### Async Boundaries
-```ts
-Boundary.suspense({
-  render: () =>
-    Effect.gen(function* () {
-      const user = yield* fetchUser(id)
-      return yield* UserProfile({ user })
-    }),
-  fallback: () => $.div("Loading..."),
-  catch: (error) => $.div(`Error: ${error.message}`),
-  delay: "200 millis",  // Avoid loading flash
-})
-```
-
-### Mounting
-```ts
-import { mount, runApp } from "@effex/dom"
-
-runApp(
-  Effect.gen(function* () {
-    yield* mount(App(), document.getElementById("root")!)
-  })
-)
-```
-
-## Key Types
-
-- `Signal<A>` - Readable + writable reactive state
-- `Readable<A>` - Read-only reactive value with `.get`, `.changes`, `.values`, `.map()`
-- `Derived<A>` - Computed reactive value
-- `Element<E = never>` - Effect<HTMLElement, E, Scope>
-- `Child<E = never>` - Valid children: string, number, Element, Readable, or arrays
-- `Component.Unit<R, E>` - Component with no props
-- `Component.Leaf<Props, R, E>` - Component with props, no children
-- `Component.Node<Props, ChildReqs, R, E>` - Component with optional children
-- `Component.Branch<Props, ChildReqs, R, E>` - Component with required children
-
-## Element Factories
-
-The `$` namespace contains all HTML elements:
-
-```ts
-import { $ } from "@effex/dom"
-
-$.div, $.span, $.p, $.h1-$.h6, $.button, $.input, $.form, $.label,
-$.ul, $.ol, $.li, $.a, $.img, $.nav, $.header, $.footer, $.main,
-$.section, $.article, $.aside, $.textarea, $.select, $.option,
-$.table, $.thead, $.tbody, $.tr, $.th, $.td
-```
-
-Individual imports also available: `import { div, span } from "@effex/dom"`
-
-## Attributes
-
-```ts
-$.div({
-  class: "static-class",                    // or Readable<string>
-  style: { color: "red", fontSize: "16px" }, // or Readable<Record>
-  id: "my-id",
-  onClick: (e) => Effect.log("clicked"),    // Event handlers can return Effects
-  disabled: isDisabled,                      // boolean or Readable<boolean>
-}, [children])
-```
+A reactive UI framework built on Effect. Signals for state, `Readable`s for
+derivation, DOM elements as scoped `Effect`s, SSR/SSG with hydration by
+default (SPA `mount` is a secondary path).
 
 ## Packages
 
-- `@effex/core` - Reactive primitives (Signal, Derived, Readable)
-- `@effex/dom` - DOM rendering, elements, control flow, components
-- `@effex/router` - Type-safe routing
-- `@effex/form` - Form handling with Effect Schema validation
-- `@effex/platform` - Full-stack SSR framework (re-exports all packages)
+- `@stax-ui/core` — reactive primitives. Re-exported by `@stax-ui/dom`; app
+  code shouldn't import from `core` directly.
+- `@stax-ui/dom` — DOM renderer, `$` element factories, control flow,
+  animation, `Screen`, `Boundary`. The umbrella app-side import.
+- `@stax-ui/router` — `Router`, `Route`, `Link`, `Outlet`.
+- `@stax-ui/platform` — SSR/SSG runtime: `Platform.toHttpRoutes`,
+  `buildStaticSite`, `makeClientLayer`.
+- `@stax-ui/vite-plugin` — Vite plugin (`staxPlatform`) for SSR/SSG builds.
+- `@stax-ui/form` — form schema + submit handling (Effect Schema). Optional.
 
-## Patterns
+Install (SSR-first):
 
-### Fetching Data
-```ts
-const UserProfile: Component.Leaf<{ userId: string }> = (props) =>
-  Boundary.suspense({
-    render: () =>
-      Effect.gen(function* () {
-        const user = yield* fetchUser(props.userId)
-        return yield* $.div([
-          $.h1(user.name),
-          $.p(user.email),
-        ])
-      }),
-    fallback: () => $.span("Loading..."),
-    catch: (error) => $.span(`Error: ${error.message}`),
-  })
+```bash
+pnpm add @stax-ui/dom @stax-ui/router @stax-ui/platform effect @effect/platform
+pnpm add -D @stax-ui/vite-plugin vite
 ```
 
-### Form Handling
+Install (SPA only, no SSR):
+
+```bash
+pnpm add @stax-ui/dom @stax-ui/router effect
+pnpm add -D vite
+```
+
+## Bootstrap (SSR-first)
+
+A Stax app has three pieces: a **server entry** (exports `router`/`app`/
+`document` for the build), a **client entry** (calls `hydrate`), and a
+**Vite config** that wires the plugin. `vite build && vite build --ssr
+src/entry.ts` produces both bundles.
+
+### `src/entry.ts` — server entry (SSG + dev SSR)
+
 ```ts
-const LoginForm: Component.Unit = () =>
+import { HttpApp, HttpRouter } from "@effect/platform";
+
+import { Platform } from "@stax-ui/platform";
+
+import { App } from "./App.js";
+import { router } from "./routes.js";
+
+// Consumed by staxPlatform at build time (SSG) — one HTML file per route.
+export { router };
+export const app = App;
+export const document = {
+  title: "My App",
+  scripts: ["/src/client.ts"], // hydration entry
+  styles: ["/styles.css"],
+  head: '<link rel="icon" href="/favicon.svg" />',
+};
+
+// Dev server: same routes handled through an HttpApp so `vite dev` can serve
+// SSR-rendered pages without going through the SSG build.
+const routes = Platform.toHttpRoutes(router, { app, document });
+const httpApp = HttpRouter.empty.pipe(HttpRouter.concat(routes));
+const handler = HttpApp.toWebHandler(httpApp);
+
+export async function render(req: Request): Promise<Response> {
+  return handler(req);
+}
+```
+
+If your app uses services (`Context.Tag`), attach them via a layer stack that
+the dev server threads through:
+
+```ts
+import { HttpApp, HttpRouter } from "@effect/platform";
+import { Layer } from "effect";
+
+import { Platform } from "@stax-ui/platform";
+
+// Server-side layer stack (SSG + dev SSR). Use no-op impls for anything that
+// only exists in the browser (localStorage, window, etc.).
+export const layers = Layer.mergeAll(StorageNoOp /* , ... */);
+
+const routes = Platform.toHttpRoutes(router, { app, document });
+const httpApp = HttpRouter.empty.pipe(HttpRouter.concat(routes));
+
+// toWebHandlerLayer peels app-defined requirements off the HttpApp so the
+// returned handler only needs Scope (which the runtime supplies).
+const { handler } = HttpApp.toWebHandlerLayer(httpApp, layers);
+
+export async function render(req: Request): Promise<Response> {
+  return handler(req);
+}
+```
+
+### `src/client.ts` — client entry (hydration)
+
+```ts
+import "./styles.css";
+import { Layer } from "effect";
+
+import { hydrate } from "@stax-ui/dom/hydrate";
+import { makeClientLayer } from "@stax-ui/platform";
+
+import { App } from "./App.js";
+import { router } from "./routes.js";
+
+// makeClientLayer(router) provides NavigationContext + client control ctx.
+// Merge additional live services (e.g. StorageLive) alongside it.
+hydrate(App(), document.getElementById("root")!, {
+  layers: Layer.mergeAll(makeClientLayer(router) /* , StorageLive */),
+});
+```
+
+Note the import path: `@stax-ui/dom/hydrate`, not `@stax-ui/dom`.
+
+### `vite.config.ts`
+
+```ts
+import { defineConfig } from "vite";
+
+import { staxPlatform } from "@stax-ui/vite-plugin";
+
+export default defineConfig({
+  plugins: [
+    staxPlatform({ mode: "ssg", entry: "src/entry.ts" }),
+  ],
+});
+```
+
+Build command:
+
+```bash
+vite build && vite build --ssr src/entry.ts
+```
+
+The plugin also strips server-only code (loaders, static-path generators)
+from the client bundle.
+
+### SPA-only path (no SSR)
+
+If you don't want SSR, skip `entry.ts` / `client.ts` / the plugin and mount
+directly. `mount` requires the DOM renderer layer.
+
+```ts
+import { Effect, Layer } from "effect";
+
+import { $, DOMRendererLive, mount } from "@stax-ui/dom";
+import { ClientControlCtx } from "@stax-ui/dom";
+
+const App = () => $.div({}, "Hello");
+
+Effect.runPromise(
+  mount(App(), document.getElementById("root")!).pipe(
+    Effect.scoped,
+    Effect.provide(Layer.mergeAll(DOMRendererLive, ClientControlCtx)),
+  ),
+);
+```
+
+For a routed SPA, provide `makeClientLayer(router)` alongside the DOM
+renderer, and render `Outlet({ router })` from the app root.
+
+## Reactive primitives
+
+### `Signal` — readable + writable state
+
+```ts
+import { Effect } from "effect";
+
+import { Readable, Signal } from "@stax-ui/dom";
+
+Effect.gen(function* () {
+  const count = yield* Signal.make(0);
+
+  yield* count.get;              // Effect<number>  — read
+  yield* count.set(5);           // Effect<void>    — write
+  yield* count.update((n) => n + 1);
+
+  // Derive a Readable — no yield, no scope. `Readable.map` is a
+  // static combinator (or pipeable: `count.pipe(Readable.map(fn))`).
+  const doubled = Readable.map(count, (n) => n * 2);
+});
+```
+
+`Signal.make` requires `Scope.Scope` — always yielded inside an `Effect.gen`
+that itself lives under a scope (a component body, a service constructor).
+
+### `Signal.Array` / `Signal.Map` / `Signal.Set` / `Signal.Struct`
+
+Collection signals with in-place mutation methods. The array is the most
+common:
+
+```ts
+import { Effect } from "effect";
+
+import { Signal, type SignalArray } from "@stax-ui/dom";
+
+interface Todo { id: string; text: string; done: boolean }
+
+Effect.gen(function* () {
+  const todos: SignalArray<Todo> = yield* Signal.Array.make<Todo>([]);
+
+  yield* todos.push({ id: "1", text: "buy milk", done: false });
+  yield* todos.modifyAt(0, (t) => ({ ...t, done: !t.done }));
+  yield* todos.removeAt(0);
+  yield* todos.set([]);          // whole-array replace (from Signal)
+  yield* todos.update((arr) => arr.filter((t) => !t.done));
+
+  const list = yield* todos.get; // readonly Todo[]
+});
+```
+
+`Signal.Map`, `Signal.Set`, `Signal.Struct` follow the same pattern with
+`.set/.delete/.clear` / add-remove / `.setField` mutators. Types
+(`SignalMap<K, V>`, `SignalSet<T>`, `SignalStruct<T>`) are re-exported from
+`@stax-ui/dom` too.
+
+### `Readable` — read-only reactive value
+
+The interface itself is minimal: `get: Effect<A>`, `changes: Stream<A>`,
+`values: Stream<A>`, plus `pipe`. Everything else is a static combinator
+in the `Readable` namespace — always called as `Readable.foo(source, ...)`
+or piped as `source.pipe(Readable.foo(...))`. There are no combinator
+methods on the instance.
+
+```ts
+import { Readable } from "@stax-ui/dom";
+
+const one   = Readable.of(1);                        // constant Readable
+const two   = Readable.map(one, (n) => n * 2);       // derive
+const three = Readable.combine([one, two]);          // Readable<[1, 2]>
+
+// Pipe-style is equivalent.
+const four  = one.pipe(Readable.map((n) => n * 4));
+
+// Normalize `T | Readable<T>` to always-Readable — useful in components
+// whose props may be either.
+const normalized = Readable.normalize(maybeReadable);
+
+// Destructure typed fields as separate Readables.
+const { text, done } = Readable.valuesAt(row, ["text", "done"]);
+```
+
+Full namespace: `Readable.of` / `.id`, `.make` (from a `get` Effect + `changes`
+Stream factory), `.fromStream`, `.map`, `.flatMap`, `.zip`, `.zipWith`,
+`.zipAll` / `.combine` (alias), `.filter`, `.dedupe`, `.dedupeWith`, `.tap`
+(subscribe with an Effect), `.lift`, `.normalize`, `.valuesAt`, `.debug`,
+`.isReadable`.
+
+`Readable.Reactive<A>` = `A | Readable<A>`. Used pervasively for props
+that should accept either a plain value or a reactive one; call
+`Readable.normalize(input)` to lift to `Readable<A>` unconditionally.
+
+For async work, use `AsyncReadable` (below) or hoist into a route loader.
+
+### `AsyncReadable` — value | loading | error
+
+Async-flavored Readable that carries `isLoading`, `value`
+(`Option<A>`), `error` (`Option<E>`), plus `refetch()` and `reset()` actions.
+Returns synchronously — the initial fetch runs in the background under the
+caller's scope. `isLoading` reads `true` and `value` reads `None` on the
+next line, so components render a loading UI immediately without any
+`Boundary`. Wrap in `Boundary.suspense` when a blocking UX is wanted.
+
+```ts
+import { Effect } from "effect";
+
+import { AsyncReadable } from "@stax-ui/dom";
+
+Effect.gen(function* () {
+  const user = yield* AsyncReadable.tryPromise(
+    () => fetch(`/api/users/${id}`).then((r) => r.json()) as Promise<User>,
+    (err) => new FetchError({ cause: err }),
+  );
+
+  // user.isLoading : Readable<boolean>
+  // user.value     : Readable<Option<User>>
+  // user.error     : Readable<Option<FetchError>>
+  // user.refetch() : Effect<void>
+  // user.reset()   : Effect<void>
+});
+```
+
+Constructors: `AsyncReadable.make(() => Effect<A, E, R>)`,
+`.promise(() => Promise<A>)`, `.tryPromise(() => Promise<A>, onError)`,
+`.fromReadable(source, (a) => Effect<B, E, R>)` (recomputes when the
+source changes; initial computation also non-suspending).
+
+## Elements
+
+Elements are `Effect<HTMLElement | SVGElement, E, Scope | RendererContext | R>`.
+Use the `$` namespace for all element factories.
+
+```ts
+import { $ } from "@stax-ui/dom";
+
+// (attrs?, ...children) — attrs are optional.
+$.div({ class: "hero" }, $.h1("Title"), $.p("Body"));
+$.p("just children, no attrs");
+```
+
+### Attributes
+
+```ts
+import { $, Readable } from "@stax-ui/dom";
+
+$.div({
+  // string, Readable<string>, ClassValue (array or mixed), or Readable of any.
+  class: [
+    "btn",
+    Readable.map(isPrimary, (v) => (v ? "btn-primary" : "btn-secondary")),
+    "print:hidden",
+  ],
+
+  // style: object of strings, Readable<string>, or a Readable<Record<...>>.
+  style: { color: "red", fontSize: "16px" },
+
+  // Boolean attrs: boolean or Readable<boolean>.
+  disabled: isBusy,
+
+  // data-* / aria-* pass through as attributes.
+  "data-done": done,               // Readable<boolean> is fine
+  "aria-label": "Delete",
+
+  // Event handlers may return void OR Effect. Effect handlers are run in
+  // the ambient scope.
+  onClick: (e) =>
+    Effect.gen(function* () {
+      e.preventDefault();
+      yield* handler();
+    }),
+});
+```
+
+Handler types are exported as `EventHandler<E>`:
+
+```ts
+import { EventHandler } from "@stax-ui/dom";
+
+const onSubmit: EventHandler<SubmitEvent> = (e) => Effect.gen(function* () {
+  e.preventDefault();
+  yield* save();
+});
+```
+
+### Children
+
+Reactive text: pass a `Readable<string | number>` directly as a child.
+
+```ts
+const count = yield* Signal.make(0);
+
+$.div("Count: ", count);                       // count updates the text node
+$.span(text);                                  // text: Readable<string>
+```
+
+Wrapping components that forward children use `PermissiveChildren` — a
+readonly array of children (elements, strings, numbers, Readables, or nested
+arrays):
+
+```ts
+import { $, PermissiveChildren, Element } from "@stax-ui/dom";
+
+export const Card = <E = never, R = never>(
+  props: { class?: string },
+  ...children: PermissiveChildren<E, R>
+): Element.Element<HTMLDivElement, E, R> =>
+  $.div({ class: ["card", props.class] }, children);
+```
+
+## Control flow
+
+Reconciliation-based; every control-flow function is a thin wrapper over
+`reconcile` from core.
+
+### `when` — conditional
+
+```ts
+import { $, when } from "@stax-ui/dom";
+
+when(isLoggedIn, {
+  onTrue:  () => Dashboard(),
+  onFalse: () => LoginForm(),
+});
+```
+
+### `match` — pattern match on a value
+
+```ts
+import { match } from "@stax-ui/dom";
+
+match(status, {
+  cases: [
+    { pattern: "loading", render: () => Spinner() },
+    { pattern: "error",   render: () => ErrorMessage() },
+    { pattern: "success", render: () => Content() },
+  ],
+  fallback: () => $.div("Unknown"),
+});
+```
+
+Also: `matchOption(opt, { onSome, onNone })`,
+`matchEither(either, { onRight, onLeft })`.
+
+### `each` — keyed list
+
+```ts
+import { $, each, stagger } from "@stax-ui/dom";
+
+each(todos, {
+  container: () => $.ul({ class: "todo-list" }),
+  key: (todo) => todo.id,
+  render: (todoR /* Readable<Todo> */) => TodoItem({ todo: todoR }),
+});
+```
+
+`each`'s **animation surface** is the headline feature; the config accepts
+`animate` (enter/exit/move classes + optional stagger + optional group) and
+`intro`:
+
+```ts
+each(todos, {
+  key: (t) => t.id,
+  container: () => $.ul(),
+  render: (t) => TodoItem({ todo: t }),
+  animate: {
+    enterFrom: "opacity-0 -translate-y-2",
+    enter:     "transition-all duration-300",
+    enterTo:   "opacity-100 translate-y-0",
+    exit:      "transition-all duration-300",
+    exitTo:    "opacity-0",
+    stagger:   stagger(50),                   // per-item delay
+    move: {
+      transform:  Animation.moveTranslate3d,  // FLIP reorder helper
+      transition: "transition-transform duration-300",
+    },
+  },
+  intro: true,                                // play enter on initial mount
+});
+```
+
+Handler for `render`: receives a `Readable<A>` (or in the wrapping
+component's case, a `Readable.Reactive<A>` that `Readable.normalize` will
+lift to a Readable).
+
+## Animation
+
+### `animated` — wrap any element with an intro / hydration animation
+
+```ts
+import { $, animated, Animation } from "@stax-ui/dom";
+
+animated(
+  {
+    animate: {
+      enterFrom: "opacity-0 -translate-y-4",
+      enter:     "transition-all duration-500",
+      enterTo:   "opacity-100 translate-y-0",
+    },
+    intro: true,
+  },
+  () => $.h1("Hello"),
+);
+```
+
+The second argument is a `() => Element` — deferred so the animation
+runtime controls when the DOM node is materialized (matters for
+hydration + group coordination).
+
+### Groups + sequences
+
+Animate multiple children in coordinated order. `Animation.sequence(n)`
+returns an array of `AnimationGroup`s, each of which gates one element's
+enter animation:
+
+```ts
+import { Effect } from "effect";
+
+import { $, animated, Animation, OutletCtx } from "@stax-ui/dom";
+
+export const HomePage = () =>
   Effect.gen(function* () {
-    const email = yield* Signal.make("")
-    const password = yield* Signal.make("")
+    const outlet = yield* OutletCtx;
 
-    const handleSubmit = (e: SubmitEvent) =>
+    // Two groups, chained after the outlet's page-enter animation.
+    const [headline, cards] = yield* Animation.sequence(2, {
+      group: outlet.enter,
+    });
+
+    return yield* $.div(
+      animated(
+        { animate: { enterFrom: "opacity-0", enterTo: "opacity-100", group: headline }, intro: true },
+        () => $.h1("Welcome"),
+      ),
+      each(items, {
+        key: (i) => i.id,
+        animate: {
+          enterFrom: "opacity-0 translate-y-4",
+          enter:     "transition-all duration-300",
+          enterTo:   "opacity-100 translate-y-0",
+          stagger:   stagger(100),
+          group:     cards,
+        },
+        intro: true,
+        render: (i) => Card({ item: i }),
+      }),
+    );
+  });
+```
+
+Other helpers: `Animation.parallel(n)`, `Animation.awaitDone(group)` (wait
+for a group's animations to finish), `Animation.skip(group)` (skip a
+group's animation, useful for responsive breakpoints), `Animation.group(...)`
+(construct a group manually).
+
+Stagger helpers: `stagger(ms)`, `staggerFromCenter(ms)`, `staggerEased(ms, ease)`.
+
+Move transforms for FLIP reorder: `Animation.moveTranslate`,
+`Animation.moveTranslate3d`, `Animation.moveTranslateY`.
+
+## Boundaries
+
+### `Boundary.suspense` — async data with fallback
+
+```ts
+import { Boundary } from "@stax-ui/dom";
+
+Boundary.suspense({
+  render: () =>
+    Effect.gen(function* () {
+      const user = yield* fetchUser(id);
+      return yield* UserProfile({ user });
+    }),
+  fallback: () => $.div("Loading..."),
+  catch: (error) => $.div("Error: ", String(error)),
+  delay: "200 millis",                           // avoid loading flash
+});
+```
+
+### `Boundary.error` — catch failures from a subtree
+
+```ts
+Boundary.error(
+  () => riskyComponent(),
+  (error) => $.div("Something went wrong: ", String(error)),
+);
+```
+
+Idiom note: for route-level data loading, prefer `Route.static({ load })`
+below — the loader runs at build time (SSG) or request time (SSR), so the
+client renders resolved data without a suspense flash.
+
+## Screen
+
+Reactive media queries.
+
+```ts
+import { Effect } from "effect";
+
+import { Screen } from "@stax-ui/dom";
+
+Effect.gen(function* () {
+  const isMobile = yield* Screen.match("(max-width: 768px)");
+  // isMobile : Readable<boolean>
+});
+```
+
+## Router
+
+Routes are declared with `Route.make(path).pipe(...)`; a router is
+`Router.empty.pipe(...)` composing routes, layouts, fallbacks, error
+handlers.
+
+### Defining routes
+
+```ts
+import { Effect, Schema } from "effect";
+
+import { Route, Router } from "@stax-ui/router";
+
+// Static route: loader runs once at build (SSG) or per-request (SSR).
+const HomeRoute = Route.make("/").pipe(
+  Route.static({
+    load: () => Effect.succeed({}),
+    render: () => HomePage(),
+  }),
+  Route.meta({ title: "Home | My Site" }),
+);
+
+// Params + typed decoding via Effect Schema.
+const UserRoute = Route.make("/users/:id").pipe(
+  Route.params(Schema.Struct({ id: Schema.String })),
+  Route.static({
+    // For SSG, `paths` enumerates the params to pre-render.
+    paths: () =>
       Effect.gen(function* () {
-        e.preventDefault()
-        const emailVal = yield* email.get
-        const passVal = yield* password.get
-        yield* login(emailVal, passVal)
-      })
+        const users = yield* discoverUsers();
+        return users.map((u) => ({ id: u.id }));
+      }),
+    load: ({ params }) =>
+      Effect.gen(function* () {
+        return { user: yield* loadUser(params.id) };
+      }),
+    render: (data) => UserPage({ user: data.user }),
+  }),
+  Route.meta(({ data }) => ({
+    title: `${data.user.name} | My Site`,
+    description: data.user.bio,
+  })),
+);
+```
 
-    return yield* $.form({ onSubmit: handleSubmit }, [
+Other Route combinators: `Route.render` (client-only render), `Route.get`
+(loader + render for on-request data), `Route.post` / `.put` / `.delete`
+(form/API handlers), `Route.searchParams(schema)`, `Route.rawParams`,
+`Route.withGuard`, `Route.withAnimation`, `Route.scrollBehavior`,
+`Route.lazy`, `Route.catchTag` / `.catchAll`.
+
+### Composing a router
+
+```ts
+import { Router } from "@stax-ui/router";
+
+export const router = Router.empty.pipe(
+  Router.layout((children) => $.div({ class: "shell" }, children)),
+  Router.concat(HomeRoute),
+  Router.concat(UserRoute),
+  Router.fallback(() => NotFoundPage()),
+
+  // Route.params decoding can fail with ParseError. Handle it at the
+  // router boundary to keep the error channel `never`.
+  Router.catchTag("ParseError", (err) =>
+    Effect.gen(function* () {
+      yield* Effect.logError("Bad params", err);
+      return yield* NotFoundPage();
+    }),
+  ),
+);
+```
+
+Other Router combinators: `Router.guard`, `Router.prefixAll`,
+`Router.scrollBehavior`, `Router.catchIf`, `Router.catchAll`.
+
+### `Outlet` — where routed content renders
+
+```ts
+import { Effect } from "effect";
+
+import { $ } from "@stax-ui/dom";
+import { Outlet } from "@stax-ui/router";
+
+import { router } from "./routes.js";
+
+export const App = () =>
+  Effect.gen(function* () {
+    return yield* $.div(
+      { class: "app" },
+      Header(),
+      Outlet({
+        router,
+        animate: {
+          enterFrom: "opacity-0 translate-y-4",
+          enter:     "transition-all duration-200",
+          enterTo:   "opacity-100 translate-y-0",
+          exit:      "transition-all duration-200",
+          exitTo:    "opacity-0",
+        },
+        intro: true,
+      }),
+    );
+  });
+```
+
+Pages inside the outlet can consume `OutletCtx` to coordinate their intro
+animations off the outlet's enter group (see the animation sequences
+example above).
+
+### `Link` — SPA navigation
+
+```ts
+import { Link } from "@stax-ui/router";
+
+Link({ href: "/about", class: "nav-link" }, "About");
+Link({ to: UserRoute, params: { id: "42" } }, "View user");
+Link({ href: "/settings", replace: true }, "Settings");
+```
+
+Signature: `Link<E, R>(props: LinkProps, ...children: PermissiveChildren<E, R>)`.
+
+## Components
+
+Plain functions returning `Effect<Element, E, R>` — nothing more.
+
+```ts
+import { Effect } from "effect";
+
+import { $, Readable } from "@stax-ui/dom";
+
+interface CardProps {
+  readonly title: string;
+  readonly onClick?: () => Effect.Effect<void>;
+}
+
+export const Card = (props: CardProps) =>
+  Effect.gen(function* () {
+    return yield* $.div(
+      { class: "card", onClick: props.onClick },
+      $.h2(props.title),
+    );
+  });
+```
+
+For components with children, use `PermissiveChildren`:
+
+```ts
+import { $, PermissiveChildren, Element } from "@stax-ui/dom";
+
+export const Panel = <E = never, R = never>(
+  props: { class?: string },
+  ...children: PermissiveChildren<E, R>
+): Element.Element<HTMLDivElement, E, R> =>
+  $.div({ class: ["panel", props.class] }, children);
+```
+
+Consume Effect services (Router navigation, custom `Context.Tag` services)
+by yielding them inside `Effect.gen`.
+
+## Types worth knowing
+
+```ts
+import type {
+  ClassValue,             // string | Readable<string> | Array<ClassItem>
+  ClassItem,              // one member of a ClassValue array
+  EventHandler,           // <E extends Event> = (e: E) => void | Effect<...>
+  PermissiveChildren,     // <E, R> = ReadonlyArray<ChildInput<E, R>>
+  Children,               // strict child array (single-arg form)
+  ChildInput,             // one child value (element, string, number, Readable, array)
+  ChildLeaf,              // primitive child (no arrays)
+} from "@stax-ui/dom";
+
+import { Element } from "@stax-ui/dom";
+// Element.Element<A, E, R>     — element type with correct generic order
+// Element.Child<E, R>          — the effect-side child type
+// Element.ChildNode            — the primitive result type
+
+import { Readable, Signal, type SignalArray, type SignalMap, type SignalSet, type SignalStruct } from "@stax-ui/dom";
+// Readable.Readable<A>
+// Readable.Reactive<A>         — A | Readable<A> (accepted by many APIs)
+// Signal.Signal<A>             — read + write
+```
+
+`Element.Element` is `Effect<A, E, Scope | RendererContext | R>` where
+`A extends HTMLElement | SVGElement` — **DOM-node type first**, then error,
+then requirements.
+
+## Common patterns
+
+### Services via `Context.Tag`
+
+The idiomatic way to inject side-effects (storage, HTTP, config). Live impl
+for the client, no-op impl for SSR/tests.
+
+```ts
+import { Context, Effect, Layer, Scope, Stream } from "effect";
+
+import { Readable, Signal, type SignalArray } from "@stax-ui/dom";
+
+export class Storage extends Context.Tag("my-app/Storage")<
+  Storage,
+  {
+    readonly persistArray: <T>(
+      key: string,
+      defaults: readonly T[],
+    ) => Effect.Effect<SignalArray<T>, never, Scope.Scope>;
+  }
+>() {}
+
+// Live: persist to localStorage; write-through via a scoped fiber.
+export const StorageLive = Layer.effect(
+  Storage,
+  Effect.gen(function* () {
+    return {
+      persistArray: <T>(key: string, defaults: readonly T[]) =>
+        Effect.gen(function* () {
+          const raw = localStorage.getItem(key);
+          const initial = raw ? (JSON.parse(raw) as readonly T[]) : defaults;
+          const arr = yield* Signal.Array.make<T>([...initial]);
+
+          // Persist on every change; forkScoped ties this to the caller's scope.
+          yield* Stream.runForEach(arr.changes, (value) =>
+            Effect.sync(() => localStorage.setItem(key, JSON.stringify(value))),
+          ).pipe(Effect.forkScoped);
+
+          return arr;
+        }),
+    };
+  }),
+);
+
+// No-op: server-side / tests. `set` calls are dropped.
+export const StorageNoOp = Layer.succeed(
+  Storage,
+  Storage.of({
+    persistArray: <T>(_key: string, _defaults: readonly T[]) =>
+      Signal.Array.make<T>([]),
+  }),
+);
+```
+
+Provide layers at the top: `hydrate(App(), root, { layers:
+Layer.mergeAll(makeClientLayer(router), StorageLive) })` on the client,
+`layers` export in `entry.ts` for the server.
+
+### Form handling
+
+```ts
+import { Effect } from "effect";
+
+import { $, EventHandler, Signal } from "@stax-ui/dom";
+
+export const LoginForm = () =>
+  Effect.gen(function* () {
+    const email    = yield* Signal.make("");
+    const password = yield* Signal.make("");
+
+    const onSubmit: EventHandler<SubmitEvent> = (e) =>
+      Effect.gen(function* () {
+        yield* Effect.sync(() => e.preventDefault());
+        const emailVal = yield* email.get;
+        const passVal  = yield* password.get;
+        yield* login(emailVal, passVal);
+      });
+
+    return yield* $.form(
+      { onSubmit },
       $.input({
         type: "email",
-        value: email,
-        onInput: (e) => email.set((e.target as HTMLInputElement).value),
+        value: email,                                   // Readable — updates the DOM
+        onInput: (e: InputEvent) =>
+          email.set((e.target as HTMLInputElement).value),
       }),
       $.input({
         type: "password",
         value: password,
-        onInput: (e) => password.set((e.target as HTMLInputElement).value),
+        onInput: (e: InputEvent) =>
+          password.set((e.target as HTMLInputElement).value),
       }),
-      $.button({ type: "submit" }, "Login"),
-    ])
-  })
-)
+      $.button({ type: "submit" }, "Log in"),
+    );
+  });
 ```
 
-### Routing
+Yield every `.set(...)` — it returns `Effect<void>`, not a synchronous
+mutation. `@stax-ui/form` exists for schema-validated forms
+(`Form.make`, `Field`, submit contexts) if you want more structure.
+
+### Data loading
+
+Prefer route loaders over `Boundary.suspense` for anything that could be
+computed at build/request time — the loaded data is ready before the client
+paints:
+
 ```ts
-import { Route, Router, Link, makeRouterLayer } from "@effex/router"
-
-const routes = {
-  home: Route.make("/"),
-  user: Route.make("/users/:id"),
-}
-
-runApp(
-  Effect.gen(function* () {
-    const router = yield* Router.make(routes)
-    const routerLayer = makeRouterLayer(router)
-
-    yield* mount(
-      App().pipe(Effect.provide(routerLayer)),
-      document.getElementById("root")!
-    )
-  })
-)
+const PostRoute = Route.make("/posts/:slug").pipe(
+  Route.params(Schema.Struct({ slug: Schema.String })),
+  Route.static({
+    paths: () =>
+      Effect.gen(function* () {
+        return (yield* discoverPosts()).map((p) => ({ slug: p.slug }));
+      }),
+    load: ({ params }) =>
+      Effect.gen(function* () {
+        return { post: yield* loadPost(params.slug) };
+      }),
+    render: (data) => PostPage({ post: data.post }),
+  }),
+);
 ```
+
+Reach for `Boundary.suspense` for client-only fetches: user actions that
+trigger a request, data behind auth, etc. `AsyncReadable` is the reactive
+primitive underneath.
+
+### Reactive destructuring
+
+When a `render` callback receives a `Readable<Row>` and you want per-field
+Readables:
+
+```ts
+import { Readable } from "@stax-ui/dom";
+
+export const TodoItem = ({ todo }: { todo: Readable.Reactive<Todo> }) =>
+  Effect.gen(function* () {
+    const row = Readable.normalize(todo);
+    const { text, done } = Readable.valuesAt(row, ["text", "done"]);
+    // text : Readable<string>, done : Readable<boolean>
+
+    // The id doesn't change over the row's lifetime — capture it once.
+    const id = (yield* row.get).id;
+
+    return yield* $.li(
+      { "data-done": done },
+      $.input({ type: "checkbox", checked: done, onChange: () => toggle(id) }),
+      $.span(text),
+    );
+  });
+```
+
+## Not covered here
+
+Also exported and available (real APIs, out of scope for this quickstart):
+`Portal`, `virtualEach` / `VirtualListRef` (windowed lists), `FocusTrap`,
+`Keyboard` (bindings), `ScrollLock`, `UniqueId`, `Transition` (state
+machines), `Mutation` (imperative-write helper), `Ref` (Effect-flavored ref
+wrapper), `collect`, `provide`, `t` (template helpers).
