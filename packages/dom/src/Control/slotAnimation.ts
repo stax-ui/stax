@@ -541,36 +541,54 @@ export const forkSlotRemoval = (
     readonly scope: Scope.CloseableScope | null;
   },
   removeFromDom: () => void,
-): Effect.Effect<void, never, Scope.Scope> => {
-  const body = Effect.gen(function* () {
-    if (entry.scope) {
-      yield* Scope.close(entry.scope, Exit.void);
-    }
+): Effect.Effect<void, never, Scope.Scope> =>
+  Effect.gen(function* () {
+    // Resolve + register on the exit group HERE, in the caller's
+    // fiber (i.e. reconcile's removeSlot dispatch), matching what
+    // `forkSlotEnter` does for the enter side. If the register moved
+    // into the forked body below, it would race the empty-group
+    // fast-path: `Animation.parallel(2)` opens the group's gate
+    // immediately and schedules `Effect.sleep(0)` to fire `_done`
+    // when `pending === 0`. Both the fast-path and the forked body's
+    // first steps wake on the next scheduler tick, and the fast-path
+    // often wins — spuriously firing `_done` before the exit
+    // registration lands, so `Animation.awaitDone(exitGroup)` in a
+    // custom scroll behavior would return immediately instead of
+    // waiting for the actual exit animation.
+    type ExitAnimateOptions = Parameters<typeof runExitAnimation>[1];
+    let grp: AnimationGroup | undefined;
+    let resolved: ResolvedAnimation<ExitAnimateOptions> | undefined;
     if (entry.element instanceof HTMLElement) {
-      const resolved =
-        yield* readAnimation<Parameters<typeof runExitAnimation>[1]>();
+      resolved = yield* readAnimation<ExitAnimateOptions>();
       if (resolved) {
-        // Resolve the exit-side group same way as enter — `exitGroup`
-        // takes precedence over `group`. Register/complete on the
-        // group so `Animation.awaitDone(exitGroup)` in a custom
-        // scroll behavior (etc.) actually gates on the exit
-        // animation completing.
-        const grp =
+        // Resolve the exit-side group — `exitGroup` takes precedence
+        // over `group`. Register/complete on the group so
+        // `Animation.awaitDone(exitGroup)` in a custom scroll
+        // behavior (etc.) actually gates on the exit animation
+        // completing.
+        grp =
           (yield* resolveGroup(resolved.animate.exitGroup)) ??
           (yield* resolveGroup(resolved.animate.group));
         if (grp) {
           _register(grp);
         }
+      }
+    }
+
+    const body = Effect.gen(function* () {
+      if (entry.scope) {
+        yield* Scope.close(entry.scope, Exit.void);
+      }
+      if (resolved && entry.element instanceof HTMLElement) {
         yield* runExitAnimation(
           Effect.succeed(entry.element),
           resolved.animate,
         ).pipe(Effect.ensuring(grp ? _complete(grp) : Effect.void));
       }
-    }
-    removeFromDom();
+      removeFromDom();
+    });
+    yield* Effect.asVoid(Effect.forkScoped(body));
   });
-  return Effect.asVoid(Effect.forkScoped(body));
-};
 
 // Resolve a group ref that may be either a value or an
 // `Effect<AnimationGroup | undefined>`. The Effect form is what lets
