@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect";
 
-import { $, collect } from "@stax-ui/dom";
+import { $ } from "@stax-ui/dom";
 import { Link, Route } from "@stax-ui/router";
 
 // Mock users data
@@ -30,50 +30,26 @@ const UserDetailPage = ({
     if (!user) {
       return yield* $.div(
         { class: "space-y-4" },
-        collect(
-          $.h1(
-            { class: "text-3xl font-bold text-red-600" },
-            $.of("User Not Found"),
-          ),
-          $.p(
-            { class: "text-gray-600" },
-            $.of(`No user with ID ${id} exists.`),
-          ),
-          Link(
-            { href: "/users", class: "text-blue-600 hover:underline" },
-            $.of("Back to Users"),
-          ),
+        $.h1({ class: "text-3xl font-bold text-red-600" }, "User Not Found"),
+        $.p({ class: "text-gray-600" }, `No user with ID ${id} exists.`),
+        Link(
+          { href: "/users", class: "text-blue-600 hover:underline" },
+          "Back to Users",
         ),
       );
     }
 
     return yield* $.div(
       { class: "space-y-4" },
-      collect(
-        $.h1({ class: "text-3xl font-bold" }, $.of(user.name)),
-        $.div(
-          { class: "bg-white p-4 rounded shadow" },
-          collect(
-            $.p(
-              {},
-              collect(
-                $.span({ class: "font-semibold" }, $.of("ID: ")),
-                $.of(String(user.id)),
-              ),
-            ),
-            $.p(
-              {},
-              collect(
-                $.span({ class: "font-semibold" }, $.of("Email: ")),
-                $.of(user.email),
-              ),
-            ),
-          ),
-        ),
-        Link(
-          { href: "/users", class: "text-blue-600 hover:underline" },
-          $.of("Back to Users"),
-        ),
+      $.h1({ class: "text-3xl font-bold" }, user.name),
+      $.div(
+        { class: "bg-white p-4 rounded shadow" },
+        $.p({}, $.span({ class: "font-semibold" }, "ID: "), String(user.id)),
+        $.p({}, $.span({ class: "font-semibold" }, "Email: "), user.email),
+      ),
+      Link(
+        { href: "/users", class: "text-blue-600 hover:underline" },
+        "Back to Users",
       ),
     );
   });

@@ -17,10 +17,7 @@ export const App = () =>
         collect(
           $.header(
             { class: "navbar bg-base-100 shadow-sm" },
-            $.h1(
-              { class: "text-xl font-bold px-4" },
-              $.of("Stax Kanban Board"),
-            ),
+            $.h1({ class: "text-xl font-bold px-4" }, "Stax Kanban Board"),
           ),
           KanbanBoard(),
           CardDetailDialog(),

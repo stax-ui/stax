@@ -1,6 +1,6 @@
 import { Effect, Scope } from "effect";
 
-import { $, collect, ControlCtx, Element, RendererContext } from "@stax-ui/dom";
+import { $, ControlCtx, Element, RendererContext } from "@stax-ui/dom";
 import { Link, NavigationContext, Route } from "@stax-ui/router";
 
 // Mock users data
@@ -29,29 +29,25 @@ const UsersPage = (props: {
 
     return yield* $.div(
       { class: "space-y-4" },
-      collect(
-        $.h1({ class: "text-3xl font-bold" }, $.of("Users")),
-        $.ul(
-          { class: "space-y-2" },
-          collect(
-            ...users.map((user) =>
-              $.li(
-                { class: "p-3 bg-white rounded shadow" },
-                Link(
-                  {
-                    href: `/users/${user.id}`,
-                    class: "text-blue-600 hover:underline",
-                  },
-                  $.of(user.name),
-                ),
-              ),
+      $.h1({ class: "text-3xl font-bold" }, "Users"),
+      $.ul(
+        { class: "space-y-2" },
+        ...users.map((user) =>
+          $.li(
+            { class: "p-3 bg-white rounded shadow" },
+            Link(
+              {
+                href: `/users/${user.id}`,
+                class: "text-blue-600 hover:underline",
+              },
+              user.name,
             ),
           ),
         ),
-        Link(
-          { href: "/", class: "text-blue-600 hover:underline" },
-          $.of("Back to Home"),
-        ),
+      ),
+      Link(
+        { href: "/", class: "text-blue-600 hover:underline" },
+        "Back to Home",
       ),
     );
   });

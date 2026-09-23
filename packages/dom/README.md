@@ -700,9 +700,9 @@ yield* $.div(
 | Export | Description |
 |--------|-------------|
 | `$.<element>(attrs?, ...children)` | Create an HTML/SVG element with variadic children |
-| `$.of(value)` | Lift a primitive/Readable into a `Child` effect (rarely needed — pass values directly as children) |
+| `$.of(value)` | **Deprecated.** Pass primitives / Readables directly as children instead. |
 | `$.empty` | Empty child (produces no DOM nodes) |
-| `collect(...children)` | Combine multiple children into a single `Child` (mostly obsolete — variadic children are natural now) |
+| `collect(...children)` | **Deprecated.** Element factories are variadic — spread children directly. |
 | `t\`template\`` | Create reactive template string |
 | `provide(tag, value, children)` | Provide context to children |
 

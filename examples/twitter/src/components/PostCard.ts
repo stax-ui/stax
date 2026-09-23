@@ -1,6 +1,6 @@
 import { Effect } from "effect";
 
-import { $, collect, Readable } from "@stax-ui/dom";
+import { $, Readable } from "@stax-ui/dom";
 import { Link } from "@stax-ui/router";
 
 import type { Post, User } from "../services/PostService.js";
@@ -21,55 +21,45 @@ export const PostCard = (props: {
       { class: "card bg-base-100 shadow-sm" },
       $.div(
         { class: "card-body p-4" },
-        collect(
-          // Author info
+        // Author info
+        $.div(
+          { class: "flex items-center gap-2 mb-2" },
           $.div(
-            { class: "flex items-center gap-2 mb-2" },
-            collect(
-              $.div(
-                { class: "avatar placeholder" },
-                $.div(
-                  { class: "bg-neutral text-neutral-content w-8 rounded-full" },
-                  $.span(
-                    { class: "text-xs" },
-                    $.of(
-                      Readable.map(props.author, (a) =>
-                        a.name.charAt(0).toUpperCase(),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              $.div(
-                {},
-                collect(
-                  Link(
-                    { href: authorLink, class: "font-bold link link-hover" },
-                    $.of(Readable.map(props.author, (a) => a.name)),
-                  ),
-                  $.span(
-                    { class: "text-base-content/60 ml-2 text-sm" },
-                    $.of(Readable.map(props.author, (a) => a.handle)),
-                  ),
+            { class: "avatar placeholder" },
+            $.div(
+              { class: "bg-neutral text-neutral-content w-8 rounded-full" },
+              $.span(
+                { class: "text-xs" },
+                Readable.map(props.author, (a) =>
+                  a.name.charAt(0).toUpperCase(),
                 ),
               ),
             ),
           ),
-          // Content
-          $.p(
-            { class: "text-base-content mb-3" },
-            $.of(Readable.map(props.post, (p) => p.content)),
-          ),
-          // Timestamp
           $.div(
-            { class: "text-base-content/50 text-xs" },
+            {},
             Link(
-              { href: postLink, class: "link link-hover" },
-              $.of(
-                Readable.map(props.post, (p) =>
-                  new Date(p.createdAt).toLocaleString(),
-                ),
-              ),
+              { href: authorLink, class: "font-bold link link-hover" },
+              Readable.map(props.author, (a) => a.name),
+            ),
+            $.span(
+              { class: "text-base-content/60 ml-2 text-sm" },
+              Readable.map(props.author, (a) => a.handle),
+            ),
+          ),
+        ),
+        // Content
+        $.p(
+          { class: "text-base-content mb-3" },
+          Readable.map(props.post, (p) => p.content),
+        ),
+        // Timestamp
+        $.div(
+          { class: "text-base-content/50 text-xs" },
+          Link(
+            { href: postLink, class: "link link-hover" },
+            Readable.map(props.post, (p) =>
+              new Date(p.createdAt).toLocaleString(),
             ),
           ),
         ),

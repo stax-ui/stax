@@ -1,13 +1,6 @@
 import { Effect, Option, Schema } from "effect";
 
-import {
-  $,
-  AsyncCache,
-  collect,
-  each,
-  matchOption,
-  Readable,
-} from "@stax-ui/dom";
+import { $, AsyncCache, each, matchOption, Readable } from "@stax-ui/dom";
 import { Field, Form } from "@stax-ui/form";
 import { RouteDataContext } from "@stax-ui/router";
 
@@ -40,7 +33,7 @@ const PostList = ({
         );
 
         return yield* matchOption(author, {
-          onNone: () => $.div({}, $.of("Unknown author")),
+          onNone: () => $.div({}, "Unknown author"),
           onSome: (author) => PostCard({ post, author }),
         });
       }),
@@ -84,55 +77,51 @@ export const FeedPage = (data: {
 
     return yield* $.div(
       {},
-      collect(
-        $.h1({ class: "text-3xl font-bold mb-6" }, $.of("Feed")),
-        // New post form
-        NewPostForm.provide(
-          {
-            defaults: { content: "" },
-            action: actions.create,
-            onSubmit: (ctx) =>
-              Effect.gen(function* () {
-                yield* Effect.tryPromise(() =>
-                  fetch(actions.create, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(ctx.encoded),
-                  }),
-                );
-                // Invalidate feed cache — triggers refetch, UI updates reactively
-                yield* cache.invalidate(["feed"]);
-                yield* cache.invalidate(["posts"]);
-              }),
-          },
-          Effect.gen(function* () {
-            const content = yield* NewPostForm.fields.content;
+      $.h1({ class: "text-3xl font-bold mb-6" }, "Feed"),
+      // New post form
+      NewPostForm.provide(
+        {
+          defaults: { content: "" },
+          action: actions.create,
+          onSubmit: (ctx) =>
+            Effect.gen(function* () {
+              yield* Effect.tryPromise(() =>
+                fetch(actions.create, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify(ctx.encoded),
+                }),
+              );
+              // Invalidate feed cache — triggers refetch, UI updates reactively
+              yield* cache.invalidate(["feed"]);
+              yield* cache.invalidate(["posts"]);
+            }),
+        },
+        Effect.gen(function* () {
+          const content = yield* NewPostForm.fields.content;
 
-            return yield* $.form(
-              { class: "card bg-base-100 shadow-sm mb-6" },
-              $.div(
-                { class: "card-body p-4" },
-                collect(
-                  $.textarea({
-                    class: "textarea textarea-bordered w-full mb-3",
-                    name: "content",
-                    placeholder: "What's happening?",
-                    rows: 3,
-                    value: content.value,
-                    onInput: (e: Event) =>
-                      content.set((e.target as HTMLTextAreaElement).value),
-                  }),
-                  $.button(
-                    { type: "submit", class: "btn btn-primary btn-sm" },
-                    $.of("Post"),
-                  ),
-                ),
+          return yield* $.form(
+            { class: "card bg-base-100 shadow-sm mb-6" },
+            $.div(
+              { class: "card-body p-4" },
+              $.textarea({
+                class: "textarea textarea-bordered w-full mb-3",
+                name: "content",
+                placeholder: "What's happening?",
+                rows: 3,
+                value: content.value,
+                onInput: (e: Event) =>
+                  content.set((e.target as HTMLTextAreaElement).value),
+              }),
+              $.button(
+                { type: "submit", class: "btn btn-primary btn-sm" },
+                "Post",
               ),
-            );
-          }),
-        ),
-        // Post list — reactive on client (via cache), static on server
-        PostList({ posts, users }),
+            ),
+          );
+        }),
       ),
+      // Post list — reactive on client (via cache), static on server
+      PostList({ posts, users }),
     );
   });

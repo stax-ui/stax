@@ -5,7 +5,6 @@ import { Readable, Signal } from "@stax-ui/core";
 
 import { Animation } from "../../Animation/index.js";
 import { Boundary } from "../../Boundary.js";
-import { collect } from "../../Collect.js";
 import { animated, each, match, when } from "../../Control/index.js";
 import { $ } from "../../Element/index.js";
 import { renderToString } from "../server/index.js";
@@ -240,24 +239,22 @@ describe("Hydration", () => {
 
           return yield* $.div(
             {},
-            collect(
-              when(show1, {
-                onTrue: () => $.span({}, $.of("First visible")),
-                onFalse: () => $.span({}, $.of("First hidden")),
-              }),
-              Boundary.suspense({
-                render: () =>
-                  Effect.gen(function* () {
-                    yield* Effect.sleep(10);
-                    return yield* $.div({}, $.of("Async content"));
-                  }),
-                fallback: () => $.div({}, $.of("Loading...")),
-              }),
-              when(show2, {
-                onTrue: () => $.span({}, $.of("Second visible")),
-                onFalse: () => $.span({}, $.of("Second hidden")),
-              }),
-            ),
+            when(show1, {
+              onTrue: () => $.span({}, "First visible"),
+              onFalse: () => $.span({}, "First hidden"),
+            }),
+            Boundary.suspense({
+              render: () =>
+                Effect.gen(function* () {
+                  yield* Effect.sleep(10);
+                  return yield* $.div({}, "Async content");
+                }),
+              fallback: () => $.div({}, "Loading..."),
+            }),
+            when(show2, {
+              onTrue: () => $.span({}, "Second visible"),
+              onFalse: () => $.span({}, "Second hidden"),
+            }),
           );
         });
 

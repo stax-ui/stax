@@ -492,12 +492,7 @@ const applyEventHandler = <A extends HTMLElement>(
   el: Element<A>,
   eventName: string,
   handler: EventHandler<Event>,
-): Element<A> =>
-  Core.on(
-    el,
-    eventName as keyof HTMLElementEventMap,
-    handler as (e: Event) => Effect.Effect<void, never, never>,
-  );
+): Element<A> => Core.on(el, eventName as keyof HTMLElementEventMap, handler);
 
 /**
  * Apply innerHTML to an element using Core functions.
@@ -1014,6 +1009,13 @@ export const marker = makeSVGElementFactory("marker");
 
 /**
  * Lift a primitive value into a Child.
+ *
+ * @deprecated Element factories accept primitives and Readables directly
+ * as children — pass the value straight through instead of wrapping in
+ * `$.of(...)`. `$.p("Hello")` replaces `$.p($.of("Hello"))`;
+ * `$.span(name)` (with `name: Readable<string>`) replaces
+ * `$.span($.of(name))`. Strings, numbers, and `Readable<string | number>`
+ * are all valid children.
  */
 export const of = Core.of;
 

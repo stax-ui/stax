@@ -339,35 +339,33 @@ export const redraw = <
  *     const [g0, g1, g2] = yield* Animation.sequence(3);
  *     return $.h1(
  *       {},
- *       collect(
- *         animated(
- *           {
- *             animate: {
- *               enterFrom: "opacity-0",
- *               enter: "opacity-100 transition duration-300",
- *               group: g0,
- *             },
- *             intro: true,
+ *       animated(
+ *         {
+ *           animate: {
+ *             enterFrom: "opacity-0",
+ *             enter: "opacity-100 transition duration-300",
+ *             group: g0,
  *           },
- *           () => $.span({}, $.of("Hello,")),
- *         ),
- *         animated(
- *           // No visual animation — the span has its own CSS keyframes; the
- *           // group still gates when it appears in the sequence.
- *           { animate: { group: g1 } },
- *           () => $.span({ class: "wobble" }, $.of("world!")),
- *         ),
- *         animated(
- *           {
- *             animate: {
- *               enterFrom: "opacity-0",
- *               enter: "opacity-100 transition duration-500",
- *               group: g2,
- *             },
- *             intro: true,
+ *           intro: true,
+ *         },
+ *         () => $.span({}, "Hello,"),
+ *       ),
+ *       animated(
+ *         // No visual animation — the span has its own CSS keyframes; the
+ *         // group still gates when it appears in the sequence.
+ *         { animate: { group: g1 } },
+ *         () => $.span({ class: "wobble" }, "world!"),
+ *       ),
+ *       animated(
+ *         {
+ *           animate: {
+ *             enterFrom: "opacity-0",
+ *             enter: "opacity-100 transition duration-500",
+ *             group: g2,
  *           },
- *           () => $.span({}, $.of("Welcome.")),
- *         ),
+ *           intro: true,
+ *         },
+ *         () => $.span({}, "Welcome."),
  *       ),
  *     );
  *   });
