@@ -1,6 +1,6 @@
 {
   "name": "@stax-ui/form",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Form handling for Stax applications",
   "type": "module",
   "license": "MPL-2.0",

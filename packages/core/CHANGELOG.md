@@ -1,5 +1,96 @@
 # Changelog
 
+## 0.7.0
+
+### Minor Changes
+
+- 4cffac7: fix(core): `AsyncReadable` no longer suspends its caller on the initial fetch
+
+  `AsyncReadable.make` used to `await` its initial `runFetch()` before returning
+  the handle, so `const data = yield* AsyncReadable.make(...)` inside a component
+  suspended construction of that component and everything below it in the tree
+  until the request settled. Two consequences:
+
+  - `isLoading` was unobservable on first load. By the time a consumer held the
+    handle, loading was already `false`. The flag only meant anything during a
+    later `refetch()`, contradicting the documented intent
+    (`userData.isLoading: Readable<boolean>` was supposed to be reactive from the
+    first render).
+  - Sibling animation gates could resolve empty. An intro `Animation.sequence`
+    above the creator opened its first gate, waited a tick, saw no registrants,
+    and force-resolved — all before the awaited HTTP request settled and the
+    actual `animated` elements mounted. The animation "just stopped working" with
+    no error surface anywhere.
+
+  The initial fetch now runs in a forked fiber, and `isLoading` is flipped to
+  `true` synchronously in the outer scope before the fork so consumers reading it
+  on the very next line (or wiring a subscribe callback right after `make()`
+  returns) see the loading state.
+
+  **This is a behaviour change.** Code that reads `ar.value` (or `ar.error`)
+  immediately after `yield* AsyncReadable.make(...)` and expects a populated
+  `Option` will now see `Option.none()` on the next line. Reactive uses (via
+  `.get` in subscribers, or by passing `ar.value` into an element's attribute
+  binding) require no change — they observe the value flip when the fetch
+  settles. Callers that want the old blocking UX should wrap the component in
+  `Boundary.suspense`.
+
+  Same treatment for `AsyncReadable.fromReadable`, which had the identical
+  suspend-on-initial pattern for its first computation. `AsyncCache`'s
+  non-seeded path delegates to `AsyncReadable.make`, so the fix propagates
+  there transparently.
+
+  Design story: `Boundary.suspense` remains the suspending primitive. With this
+  change, the composable split is clean — `AsyncReadable` never suspends
+  (TanStack `useQuery` analogue), wrap in `Boundary.suspense` when the subtree
+  should block (TanStack `useSuspenseQuery` analogue).
+
+  Related but out of scope: `AsyncCache` with `initialData` currently means
+  "never fetch"; TanStack treats `initialData` as stale and revalidates. Left
+  as-is pending a separate decision — the SSR-hydration use case may want
+  today's behaviour.
+
+### Patch Changes
+
+- f2b4ee0: fix(core): `reconcile` — `each` is now O(n), not O(n²), per sync
+
+  `each`'s `getItemForKey` was a linear scan (`arr.find` re-invoking `config.key`
+  each step), and `reconcile` called it once per slot per sync — including for
+  slots that already existed. So every update paid `n(n+1)/2` invocations of the
+  user's `key` function. Measured: 30 rows ≈ 0.034 ms/sync; 500 rows ≈ 6.2 ms/sync,
+  which is ~31% of wall-clock at 50 updates/sec before any DOM work. Doubling n
+  roughly quadrupled time — clean quadratic. Surfaced by a streaming chat UI
+  (high-frequency updates over a keyed list).
+
+  The fix adds an optional `prepare?: (value) => unknown` field to
+  `ReconcileConfig` and threads its return through every `getItemForKey` call in
+  that sync. `each` uses it to build a `Map<key, item>` once per sync and looks
+  up in O(1) per slot. Total `config.key` calls per sync drop from
+  `n + n(n+1)/2` to `2n`.
+
+  `prepare` is deliberately per-sync, NOT cached across syncs: `SignalArray`
+  mutates its backing array in place and re-emits the same reference, so an
+  identity-keyed memo would go stale and mis-render on
+  `push` / `replaceAt` / `splice` / etc. A regression test drives `each` off a
+  `SignalArray` to catch future reintroduction of an identity-keyed cache.
+
+  Duplicate-key semantics preserved: the Map is built with `if (!has) set` so
+  first occurrence wins — matches `arr.find`. Using `new Map(arr.map(...))`
+  would keep the LAST and silently drift; a duplicate-keys test locks in the
+  current behaviour.
+
+  `when` / `match` / `matchOption` / `matchEither` don't pass `getItemForKey`
+  or `prepare`, so their code paths are untouched.
+
+  New API surface (optional, backward-compatible): `ReconcileConfig.prepare?:
+(value: A) => unknown` and a widened `getItemForKey?: (key, value, prepared) => unknown`.
+  Custom reconcile-based combinators can now precompute per-sync state once
+  and thread it through their per-slot lookups.
+
+  Also fixed defensively: `each`'s `getItemForKey` now uses optional chaining
+  on the cast (`(prepared as Map<...> | undefined)?.get(key)`) so the type
+  matches the `prepared: unknown` signature.
+
 ## 0.6.0
 
 ### Minor Changes
