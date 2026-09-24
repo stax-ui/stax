@@ -22,8 +22,8 @@ describe("Control", () => {
       Effect.gen(function* () {
         const isVisible = yield* Signal.make(true);
         const el = yield* when(isVisible, {
-          onTrue: () => $.div({}, $.of("Visible")),
-          onFalse: () => $.div({}, $.of("Hidden")),
+          onTrue: () => $.div({}, "Visible"),
+          onFalse: () => $.div({}, "Hidden"),
         });
 
         expect(el.textContent).toBe("Visible");
@@ -34,8 +34,8 @@ describe("Control", () => {
       Effect.gen(function* () {
         const isVisible = yield* Signal.make(false);
         const el = yield* when(isVisible, {
-          onTrue: () => $.div({}, $.of("Visible")),
-          onFalse: () => $.div({}, $.of("Hidden")),
+          onTrue: () => $.div({}, "Visible"),
+          onFalse: () => $.div({}, "Hidden"),
         });
 
         expect(el.textContent).toBe("Hidden");
@@ -46,8 +46,8 @@ describe("Control", () => {
       Effect.gen(function* () {
         const isVisible = yield* Signal.make(true);
         const el = yield* when(isVisible, {
-          onTrue: () => $.div({}, $.of("Visible")),
-          onFalse: () => $.div({}, $.of("Hidden")),
+          onTrue: () => $.div({}, "Visible"),
+          onFalse: () => $.div({}, "Hidden"),
         });
 
         expect(el.textContent).toBe("Visible");
@@ -74,9 +74,9 @@ describe("Control", () => {
         yield* when(isVisible, {
           onTrue: () => {
             renderCount++;
-            return $.div({}, $.of("Visible"));
+            return $.div({}, "Visible");
           },
-          onFalse: () => $.div({}, $.of("Hidden")),
+          onFalse: () => $.div({}, "Hidden"),
         });
 
         expect(renderCount).toBe(1);
@@ -101,10 +101,10 @@ describe("Control", () => {
           cases: [
             {
               pattern: "loading",
-              render: () => $.div({}, $.of("Loading...")),
+              render: () => $.div({}, "Loading..."),
             },
-            { pattern: "success", render: () => $.div({}, $.of("Done!")) },
-            { pattern: "error", render: () => $.div({}, $.of("Failed")) },
+            { pattern: "success", render: () => $.div({}, "Done!") },
+            { pattern: "error", render: () => $.div({}, "Failed") },
           ],
         });
 
@@ -121,10 +121,10 @@ describe("Control", () => {
           cases: [
             {
               pattern: "loading",
-              render: () => $.div({}, $.of("Loading...")),
+              render: () => $.div({}, "Loading..."),
             },
-            { pattern: "success", render: () => $.div({}, $.of("Done!")) },
-            { pattern: "error", render: () => $.div({}, $.of("Failed")) },
+            { pattern: "success", render: () => $.div({}, "Done!") },
+            { pattern: "error", render: () => $.div({}, "Failed") },
           ],
         });
 
@@ -148,10 +148,10 @@ describe("Control", () => {
         const value = yield* Signal.make(999);
         const el = yield* match(value, {
           cases: [
-            { pattern: 1, render: () => $.div({}, $.of("One")) },
-            { pattern: 2, render: () => $.div({}, $.of("Two")) },
+            { pattern: 1, render: () => $.div({}, "One") },
+            { pattern: 2, render: () => $.div({}, "Two") },
           ],
-          fallback: () => $.div({}, $.of("Unknown")),
+          fallback: () => $.div({}, "Unknown"),
         });
 
         expect(el.textContent).toBe("Unknown");
@@ -171,7 +171,10 @@ describe("Control", () => {
         const el = yield* each(items, {
           key: (item) => item.id,
           render: (item, _index) =>
-            $.li({}, $.of(Readable.map(item, (i) => i.name))),
+            $.li(
+              {},
+              Readable.map(item, (i) => i.name),
+            ),
         });
 
         expect(el.children.length).toBe(3);
@@ -188,7 +191,10 @@ describe("Control", () => {
         const el = yield* each(items, {
           key: (item) => item.id,
           render: (item, _index) =>
-            $.li({}, $.of(Readable.map(item, (i) => i.name))),
+            $.li(
+              {},
+              Readable.map(item, (i) => i.name),
+            ),
         });
 
         expect(el.children.length).toBe(1);
@@ -212,7 +218,10 @@ describe("Control", () => {
         const el = yield* each(items, {
           key: (item) => item.id,
           render: (item, _index) =>
-            $.li({}, $.of(Readable.map(item, (i) => i.name))),
+            $.li(
+              {},
+              Readable.map(item, (i) => i.name),
+            ),
         });
 
         expect(el.children.length).toBe(2);
@@ -233,7 +242,10 @@ describe("Control", () => {
         const el = yield* each(items, {
           key: (item) => item.id,
           render: (item, _index) =>
-            $.li({}, $.of(Readable.map(item, (i) => i.name))),
+            $.li(
+              {},
+              Readable.map(item, (i) => i.name),
+            ),
         });
 
         expect(el.children[0].textContent).toBe("Alice");
@@ -259,7 +271,10 @@ describe("Control", () => {
         const el = yield* each(items, {
           key: (item) => item.id,
           render: (item, _index) =>
-            $.li({}, $.of(Readable.map(item, (i) => i.name))),
+            $.li(
+              {},
+              Readable.map(item, (i) => i.name),
+            ),
         });
 
         expect(el.children[0].textContent).toBe("Alice");
@@ -285,7 +300,10 @@ describe("Control", () => {
         const el = yield* each(items, {
           key: (item) => item.id,
           render: (item, _index) =>
-            $.li({}, $.of(Readable.map(item, (i) => i.name))),
+            $.li(
+              {},
+              Readable.map(item, (i) => i.name),
+            ),
         });
 
         expect(el.children.length).toBe(0);
@@ -314,7 +332,10 @@ describe("Control", () => {
           const el = yield* each(items, {
             key: (item) => item.id,
             render: (item, _index) =>
-              $.li({}, $.of(Readable.map(item, (i) => i.name))),
+              $.li(
+                {},
+                Readable.map(item, (i) => i.name),
+              ),
           });
 
           // Two slots (deduped on key); "a" resolves to "First".
@@ -380,7 +401,10 @@ describe("Control", () => {
           const el = yield* each(items, {
             key: (item) => item.id,
             render: (item, _index) =>
-              $.li({}, $.of(Readable.map(item, (i) => i.name))),
+              $.li(
+                {},
+                Readable.map(item, (i) => i.name),
+              ),
           });
 
           expect(el.children.length).toBe(3);
@@ -455,7 +479,7 @@ describe("Control", () => {
           render: (item, _index) =>
             $.li(
               { "data-id": Readable.map(item, (i) => i.id) },
-              $.of(Readable.map(item, (i) => i.name)),
+              Readable.map(item, (i) => i.name),
             ),
           animate: {
             move: {
@@ -512,7 +536,10 @@ describe("Control", () => {
         const el = yield* each(items, {
           key: (item) => item.id,
           render: (item, _index) =>
-            $.li({}, $.of(Readable.map(item, (i) => i.name))),
+            $.li(
+              {},
+              Readable.map(item, (i) => i.name),
+            ),
           animate: {
             move: {
               transform: (d) => {
@@ -559,7 +586,10 @@ describe("Control", () => {
           const el = yield* each(items, {
             key: (item) => item.id,
             render: (item, _index) =>
-              $.li({}, $.of(Readable.map(item, (i) => i.name))),
+              $.li(
+                {},
+                Readable.map(item, (i) => i.name),
+              ),
           });
           document.body.appendChild(el);
 
@@ -588,7 +618,10 @@ describe("Control", () => {
         const el = yield* each(items, {
           key: (item) => item.id,
           render: (item, _index) =>
-            $.li({}, $.of(Readable.map(item, (i) => i.name))),
+            $.li(
+              {},
+              Readable.map(item, (i) => i.name),
+            ),
           animate: {
             move: {
               transform: (d) => {
@@ -628,7 +661,7 @@ describe("Control", () => {
             render: (item, _index) =>
               $.li(
                 { "data-id": Readable.map(item, (i) => i.id) },
-                $.of(Readable.map(item, (i) => i.name)),
+                Readable.map(item, (i) => i.name),
               ),
             animate: {
               move: {
@@ -686,11 +719,11 @@ describe("Control", () => {
             $.div(
               {},
               when(inner, {
-                onTrue: () => $.span({}, $.of("Both true")),
-                onFalse: () => $.span({}, $.of("Outer true, inner false")),
+                onTrue: () => $.span({}, "Both true"),
+                onFalse: () => $.span({}, "Outer true, inner false"),
               }),
             ),
-          onFalse: () => $.div({}, $.of("Outer false")),
+          onFalse: () => $.div({}, "Outer false"),
         });
 
         expect(el.textContent).toBe("Both true");
@@ -725,20 +758,20 @@ describe("Control", () => {
                 cases: [
                   {
                     pattern: "loading",
-                    render: () => $.span({}, $.of("Loading...")),
+                    render: () => $.span({}, "Loading..."),
                   },
                   {
                     pattern: "success",
-                    render: () => $.span({}, $.of("Done!")),
+                    render: () => $.span({}, "Done!"),
                   },
                   {
                     pattern: "error",
-                    render: () => $.span({}, $.of("Failed")),
+                    render: () => $.span({}, "Failed"),
                   },
                 ],
               }),
             ),
-          onFalse: () => $.div({}, $.of("Hidden")),
+          onFalse: () => $.div({}, "Hidden"),
         });
 
         expect(el.textContent).toBe("Loading...");
@@ -769,10 +802,13 @@ describe("Control", () => {
               each(items, {
                 key: (item) => item.id,
                 render: (item) =>
-                  $.span({}, $.of(Readable.map(item, (i) => i.name))),
+                  $.span(
+                    {},
+                    Readable.map(item, (i) => i.name),
+                  ),
               }),
             ),
-          onFalse: () => $.div({}, $.of("List hidden")),
+          onFalse: () => $.div({}, "List hidden"),
         });
 
         // el = when's container, el.children[0] = div from onTrue
@@ -813,10 +849,13 @@ describe("Control", () => {
                   onTrue: () =>
                     $.span(
                       {},
-                      $.of(Readable.map(item, (i) => `${i.name} (active)`)),
+                      Readable.map(item, (i) => `${i.name} (active)`),
                     ),
                   onFalse: () =>
-                    $.span({}, $.of(Readable.map(item, (i) => i.name))),
+                    $.span(
+                      {},
+                      Readable.map(item, (i) => i.name),
+                    ),
                 },
               ),
             ),
@@ -857,19 +896,19 @@ describe("Control", () => {
                       cases: [
                         {
                           pattern: "x",
-                          render: () => $.span({}, $.of("Deep X")),
+                          render: () => $.span({}, "Deep X"),
                         },
                         {
                           pattern: "y",
-                          render: () => $.span({}, $.of("Deep Y")),
+                          render: () => $.span({}, "Deep Y"),
                         },
                       ],
                     }),
                   ),
-                onFalse: () => $.div({}, $.of("Level 2 false")),
+                onFalse: () => $.div({}, "Level 2 false"),
               }),
             ),
-          onFalse: () => $.div({}, $.of("Level 1 false")),
+          onFalse: () => $.div({}, "Level 1 false"),
         });
 
         // Navigate to the deepest content
@@ -907,12 +946,12 @@ describe("Control", () => {
           {},
           collect(
             when(show1, {
-              onTrue: () => $.span({}, $.of("First visible")),
-              onFalse: () => $.span({}, $.of("First hidden")),
+              onTrue: () => $.span({}, "First visible"),
+              onFalse: () => $.span({}, "First hidden"),
             }),
             when(show2, {
-              onTrue: () => $.span({}, $.of("Second visible")),
-              onFalse: () => $.span({}, $.of("Second hidden")),
+              onTrue: () => $.span({}, "Second visible"),
+              onFalse: () => $.span({}, "Second hidden"),
             }),
           ),
         );
@@ -941,13 +980,13 @@ describe("Control", () => {
           {},
           collect(
             when(isVisible, {
-              onTrue: () => $.span({}, $.of("Visible")),
-              onFalse: () => $.span({}, $.of("Hidden")),
+              onTrue: () => $.span({}, "Visible"),
+              onFalse: () => $.span({}, "Hidden"),
             }),
             match(status, {
               cases: [
-                { pattern: "a", render: () => $.span({}, $.of("Status A")) },
-                { pattern: "b", render: () => $.span({}, $.of("Status B")) },
+                { pattern: "a", render: () => $.span({}, "Status A") },
+                { pattern: "b", render: () => $.span({}, "Status B") },
               ],
             }),
           ),
@@ -975,12 +1014,12 @@ describe("Control", () => {
           {},
           collect(
             when(showHeader, {
-              onTrue: () => $.h1({}, $.of("Header")),
-              onFalse: () => $.h1({}, $.of("No Header")),
+              onTrue: () => $.h1({}, "Header"),
+              onFalse: () => $.h1({}, "No Header"),
             }),
             each(items, {
               key: (item) => item,
-              render: (item) => $.li({}, $.of(item)),
+              render: (item) => $.li({}, item),
             }),
           ),
         );
@@ -1018,7 +1057,7 @@ describe("Control", () => {
           const items = yield* Signal.make(["a", "b", "c"]);
           yield* each(items, {
             key: (item) => item,
-            render: (item) => $.li({}, $.of(item)),
+            render: (item) => $.li({}, item),
             animate: {
               enterFrom: "opacity-0",
               enter: "opacity-100",
@@ -1049,7 +1088,7 @@ describe("Control", () => {
         const items = yield* Signal.make(["a", "b"]);
         yield* each(items, {
           key: (item) => item,
-          render: (item) => $.li({}, $.of(item)),
+          render: (item) => $.li({}, item),
           animate: {
             // Note: stagger is deliberately omitted here. `untriggered` is
             // declared only so the assertion below can reference it and be
@@ -1074,7 +1113,7 @@ describe("Control", () => {
     it.scopedLive("mounts its child inside a container", () =>
       Effect.gen(function* () {
         const el = yield* animated({}, () =>
-          $.span({ class: "greeting" }, $.of("Hello")),
+          $.span({ class: "greeting" }, "Hello"),
         );
         // Default container wraps the rendered child.
         expect(el.children.length).toBe(1);
@@ -1100,7 +1139,7 @@ describe("Control", () => {
                 timeout: 10,
               },
             },
-            () => $.span({}, $.of("Hi")),
+            () => $.span({}, "Hi"),
           );
           // Give the forked enter animation a moment to reach onBeforeEnter.
           yield* Effect.sleep("20 millis");
@@ -1134,7 +1173,7 @@ describe("Control", () => {
                 timeout: 10,
               },
             },
-            () => $.span({ class: "target" }, $.of("Hi")),
+            () => $.span({ class: "target" }, "Hi"),
           );
           // Also snapshot the classList SYNCHRONOUSLY after mount, before
           // the forked enter runs — proves applyPreInsertEnterFrom landed
@@ -1177,9 +1216,9 @@ describe("Control", () => {
                     timeout: 10,
                   },
                 },
-                () => $.span({ class: "target" }, $.of("Hi")),
+                () => $.span({ class: "target" }, "Hi"),
               ),
-            onFalse: () => $.div({ class: "gone" }, $.of("gone")),
+            onFalse: () => $.div({ class: "gone" }, "gone"),
           });
 
           // First mount fires.
@@ -1240,7 +1279,7 @@ describe("Control", () => {
                         timeout: 20,
                       },
                     },
-                    () => $.div({ class: "target" }, $.of("Hi")),
+                    () => $.div({ class: "target" }, "Hi"),
                   ),
                 ),
               ),
@@ -1293,7 +1332,7 @@ describe("Control", () => {
               timeout: 10,
             },
           },
-          () => $.span({}, $.of("First")),
+          () => $.span({}, "First"),
         );
 
         yield* animated(
@@ -1308,7 +1347,7 @@ describe("Control", () => {
               timeout: 10,
             },
           },
-          () => $.span({}, $.of("Second")),
+          () => $.span({}, "Second"),
         );
 
         // 0 fires immediately (g0 gate open), 1 waits for g0 to complete.

@@ -1,7 +1,6 @@
 import { Effect, Exit, Scope } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { collect } from "./Collect.js";
 import { $ } from "./Element/index.js";
 import { Portal } from "./Portal.js";
 import { DOMRendererLive } from "./Render/DOMRenderer.js";
@@ -159,13 +158,12 @@ describe("Portal", () => {
       yield* Portal({ target: portalRoot }, () =>
         $.div(
           { id: "modal" },
-          collect(
-            $.div({ class: "modal-header" }, $.of("Title")),
-            $.div({ class: "modal-body" }, $.of("Content")),
-            $.div(
-              { class: "modal-footer" },
-              collect($.button({}, $.of("Cancel")), $.button({}, $.of("OK"))),
-            ),
+          $.div({ class: "modal-header" }, "Title"),
+          $.div({ class: "modal-body" }, "Content"),
+          $.div(
+            { class: "modal-footer" },
+            $.button({}, "Cancel"),
+            $.button({}, "OK"),
           ),
         ),
       );

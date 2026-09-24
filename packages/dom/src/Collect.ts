@@ -9,30 +9,22 @@ import type { ChildNode } from "./Element/types.js";
  * Error and context types are properly propagated through the union,
  * so effects with different error/context types combine correctly.
  *
+ * @deprecated Element factories are variadic now — pass children directly
+ * as trailing arguments instead of wrapping them in `collect(...)`.
+ * `$.div({ class: "card" }, child1, child2, child3)` replaces
+ * `$.div({ class: "card" }, collect(child1, child2, child3))` — error
+ * and context types propagate through the variadic just as they did
+ * through `collect`.
+ *
  * @example
  * ```ts
- * import { $, collect } from "@stax-ui/dom"
+ * import { $ } from "@stax-ui/dom"
  *
- * // Multiple static children
- * div({}, collect(
- *   $.of("Hello"),
- *   span({}, $.of("World"))
- * ))
+ * // Before:
+ * $.div({}, collect($.of("Hello"), $.span({}, $.of("World"))))
  *
- * // Mixing static and effectful children
- * const Card = <E, R>(children: Child<E, R>) =>
- *   div({ class: "card" }, collect(
- *     h1({}, $.of("Title")),
- *     children  // E and R propagate up
- *   ))
- *
- * // Multiple children with different error types
- * collect(
- *   componentThatMayFail,     // Effect<ChildNode, ErrorA, never>
- *   anotherComponent,         // Effect<ChildNode, ErrorB, CtxB>
- *   $.of("static text")       // Effect<ChildNode, never, never>
- * )
- * // Result: Effect<ChildNode[], ErrorA | ErrorB, CtxB>
+ * // After:
+ * $.div({}, "Hello", $.span({}, "World"))
  * ```
  */
 export const collect = <

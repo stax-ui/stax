@@ -1,6 +1,6 @@
 import { Effect } from "effect";
 
-import { $, collect, Readable, when } from "@stax-ui/dom";
+import { $, Readable, when } from "@stax-ui/dom";
 
 import { KanbanService } from "../services/KanbanService.js";
 import type { Card as CardType } from "../types.js";
@@ -50,17 +50,15 @@ export const Card = (props: { card: Readable.Readable<CardType> }) =>
           },
           $.div(
             { class: "card-body p-3 border-l-2 border-primary" },
-            collect(
-              $.h3({ class: "font-medium text-sm" }, $.of(title)),
-              $.p({ class: "text-xs line-clamp-1" }, $.of(description)),
-              when(
-                Readable.map(priority, (p) => p !== null),
-                {
-                  onTrue: () =>
-                    $.div({ class: "mt-2" }, PriorityBadge({ priority })),
-                  onFalse: () => $.span({}, $.of("")),
-                },
-              ),
+            $.h3({ class: "font-medium text-sm" }, title),
+            $.p({ class: "text-xs line-clamp-1" }, description),
+            when(
+              Readable.map(priority, (p) => p !== null),
+              {
+                onTrue: () =>
+                  $.div({ class: "mt-2" }, PriorityBadge({ priority })),
+                onFalse: () => $.span({}, ""),
+              },
             ),
           ),
         ),

@@ -1,6 +1,6 @@
 import { Effect } from "effect";
 
-import { $, collect, each, Readable, Signal } from "@stax-ui/dom";
+import { $, each, Readable, Signal } from "@stax-ui/dom";
 
 export interface StatProps {
   label: string;
@@ -18,7 +18,6 @@ export const Stat = (props: StatProps) =>
 
         const currSize = yield* valueList.length.get;
         if (currSize > 1) {
-          yield* Effect.sleep(300); // Wait for exit animation to finish
           yield* valueList.shift();
         }
       }),
@@ -26,22 +25,20 @@ export const Stat = (props: StatProps) =>
 
     return yield* $.div(
       { class: "stat place-items-center" },
-      collect(
-        $.div({ class: "stat-title" }, $.of(props.label)),
-        $.div(
-          { class: "stat-value text-primary overflow-hidden h-14" },
-          each(valueList, {
-            key: (v) => v.toString(),
-            render: (v) => $.div({}, $.of(v)),
-            animate: {
-              enterFrom:
-                "opacity-0 translate-y-1/2 transition-all duration-300",
-              enter: "opacity-100 translate-y-0 ",
-              exit: "opactity-100 translate-y-0 transition-all duration-300",
-              exitTo: "opacity-0 -translate-y-1/2",
-            },
-          }),
-        ),
+      $.div({ class: "stat-title" }, props.label),
+      $.div(
+        { class: "stat-value text-primary h-14 relative" },
+        each(valueList, {
+          key: (v) => v.toString(),
+          render: (v) => $.div({ class: "absolute" }, v),
+          animate: {
+            enterFrom: "top-1/2 opacity-0",
+            enter: "transition-all duration-300",
+            enterTo: "opacity-100 top-0",
+            exit: "transition-all duration-300",
+            exitTo: "!opacity-0 !-top-1/2",
+          },
+        }),
       ),
     );
   });

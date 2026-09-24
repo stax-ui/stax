@@ -204,17 +204,13 @@ const CardComponent = (props: { card: Readable<Card> }) =>
 
         onDragEnd: () => kanban.dragState.set(null),
       },
-      collect(
-        $.div(
-          { class: "card-body p-3" },
-          collect(
-            $.h3({ class: "font-medium" }, $.of(title)),
-            when(Readable.map(priority, (p) => p !== null), {
-              onTrue: () => PriorityBadge({ priority }),
-              onFalse: () => $.span({}, $.of("")),
-            }),
-          ),
-        ),
+      $.div(
+        { class: "card-body p-3" },
+        $.h3({ class: "font-medium" }, title),
+        when(Readable.map(priority, (p) => p !== null), {
+          onTrue: () => PriorityBadge({ priority }),
+          onFalse: () => $.span({}, ""),
+        }),
       ),
     );
   });
@@ -271,15 +267,13 @@ const ColumnComponent = (props: { column: Column }) =>
             yield* kanban.hoverColumnId.set(null);
           }),
       },
-      collect(
-        $.h2({ class: "font-bold text-lg mb-4" }, $.of(column.title)),
-        each(columnCards, {
-          key: (card) => Effect.runSync(card.id.get),
-          container: () => $.div({ class: "space-y-2" }),
-          render: (card) => CardComponent({ card }),
-        }),
-        AddCardForm({ status: column.id }),
-      ),
+      $.h2({ class: "font-bold text-lg mb-4" }, column.title),
+      each(columnCards, {
+        key: (card) => Effect.runSync(card.id.get),
+        container: () => $.div({ class: "space-y-2" }),
+        render: (card) => CardComponent({ card }),
+      }),
+      AddCardForm({ status: column.id }),
     );
   });
 ```
@@ -301,71 +295,65 @@ const AddCardForm = (props: { status: Status }) =>
 
     return yield* $.div(
       { class: "mt-2" },
-      collect(
-        when(isOpen, {
-          onTrue: () =>
-            // Redraw to reset form each time it opens
-            redraw(isOpen, {
-              key: () => crypto.randomUUID(), // New key each open = fresh form
-              render: () =>
-                NewCardForm.provide(
-                  {
-                    defaults: { title: "" },
-                    onSubmit: (ctx) =>
-                      Effect.gen(function* () {
-                        yield* kanban.addCard(ctx.decoded.title.trim(), props.status);
-                        yield* isOpen.set(false);
-                      }),
-                  },
-                  $.form(
-                    { class: "space-y-2" },
-                    collect(
-                      Effect.gen(function* () {
-                        const titleField = yield* NewCardForm.fields.title;
-                        const hasError = Readable.map(titleField.errors, (e) => e.length > 0);
+      when(isOpen, {
+        onTrue: () =>
+          // Redraw to reset form each time it opens
+          redraw(isOpen, {
+            key: () => crypto.randomUUID(), // New key each open = fresh form
+            render: () =>
+              NewCardForm.provide(
+                {
+                  defaults: { title: "" },
+                  onSubmit: (ctx) =>
+                    Effect.gen(function* () {
+                      yield* kanban.addCard(ctx.decoded.title.trim(), props.status);
+                      yield* isOpen.set(false);
+                    }),
+                },
+                $.form(
+                  { class: "space-y-2" },
+                  Effect.gen(function* () {
+                    const titleField = yield* NewCardForm.fields.title;
+                    const hasError = Readable.map(titleField.errors, (e) => e.length > 0);
 
-                        return yield* $.input({
-                          class: Readable.map(hasError, (err) =>
-                            err
-                              ? "input input-bordered input-error w-full input-sm"
-                              : "input input-bordered w-full input-sm",
-                          ),
-                          placeholder: "Card title...",
-                          value: titleField.value,
-                          onInput: (e) => titleField.set((e.target as HTMLInputElement).value),
-                        });
-                      }),
-                      $.div(
-                        { class: "flex gap-2" },
-                        collect(
-                          $.button(
-                            { type: "submit", class: "btn btn-primary btn-sm" },
-                            $.of("Add"),
-                          ),
-                          $.button(
-                            {
-                              type: "button",
-                              class: "btn btn-ghost btn-sm",
-                              onClick: () => isOpen.set(false),
-                            },
-                            $.of("Cancel"),
-                          ),
-                        ),
+                    return yield* $.input({
+                      class: Readable.map(hasError, (err) =>
+                        err
+                          ? "input input-bordered input-error w-full input-sm"
+                          : "input input-bordered w-full input-sm",
                       ),
+                      placeholder: "Card title...",
+                      value: titleField.value,
+                      onInput: (e) => titleField.set((e.target as HTMLInputElement).value),
+                    });
+                  }),
+                  $.div(
+                    { class: "flex gap-2" },
+                    $.button(
+                      { type: "submit", class: "btn btn-primary btn-sm" },
+                      "Add",
+                    ),
+                    $.button(
+                      {
+                        type: "button",
+                        class: "btn btn-ghost btn-sm",
+                        onClick: () => isOpen.set(false),
+                      },
+                      "Cancel",
                     ),
                   ),
                 ),
-            }),
-          onFalse: () =>
-            $.button(
-              {
-                class: "btn btn-ghost btn-sm w-full",
-                onClick: () => isOpen.set(true),
-              },
-              $.of("+ Add card"),
-            ),
-        }),
-      ),
+              ),
+          }),
+        onFalse: () =>
+          $.button(
+            {
+              class: "btn btn-ghost btn-sm w-full",
+              onClick: () => isOpen.set(true),
+            },
+            "+ Add card",
+          ),
+      }),
     );
   });
 ```
@@ -377,7 +365,7 @@ const KanbanBoard = () =>
   Effect.gen(function* () {
     return yield* $.div(
       { class: "flex gap-4 p-4 overflow-x-auto min-h-screen" },
-      collect(...columns.map((column) => ColumnComponent({ column }))),
+      ...columns.map((column) => ColumnComponent({ column })),
     );
   });
 ```
@@ -385,21 +373,22 @@ const KanbanBoard = () =>
 ## App Entry Point
 
 ```typescript
-import { provide, runApp, collect } from "@stax-ui/dom";
+import { provide, runApp } from "@stax-ui/dom";
 
 const App = () =>
   Effect.gen(function* () {
     const kanbanService = yield* makeKanbanService();
 
+    // `provide` wraps a single child, so `collect` is still the way to
+    // supply more than one — the element factories are variadic, but
+    // provide takes one `Effect<A, E, R>` and preserves its shape.
     return yield* provide(
       KanbanService,
       kanbanService,
       $.div(
         { class: "min-h-screen bg-base-300" },
-        collect(
-          KanbanBoard(),
-          CardDetailDialog(), // Dialog lives at root level for Portal
-        ),
+        KanbanBoard(),
+        CardDetailDialog(), // Dialog lives at root level for Portal
       ),
     );
   });
@@ -540,108 +529,94 @@ const CardEditFormContent = (props: {
           // The first child ($.form) automatically gets onSubmit injected
           $.form(
             { class: "modal-box" },
-            collect(
-              // Title field
-              Effect.gen(function* () {
-                const titleField = yield* CardEditForm.fields.title;
-                const hasError = Readable.map(titleField.errors, (e) => e.length > 0);
+            // Title field
+            Effect.gen(function* () {
+              const titleField = yield* CardEditForm.fields.title;
+              const hasError = Readable.map(titleField.errors, (e) => e.length > 0);
 
-                return yield* $.div(
-                  { class: "form-control mb-4" },
-                  collect(
-                    $.label({ class: "label" }, $.span({ class: "label-text" }, $.of("Title"))),
-                    $.input({
-                      class: Readable.map(hasError, (err) =>
-                        err ? "input input-bordered input-error w-full" : "input input-bordered w-full",
-                      ),
-                      value: titleField.value,
-                      onInput: (e) => titleField.set((e.target as HTMLInputElement).value),
-                      onBlur: () => titleField.blur(),
-                    }),
-                    when(hasError, {
-                      onTrue: () =>
-                        $.span({ class: "label-text-alt text-error mt-1" }, $.of("Title is required")),
-                      onFalse: () => $.span({}, $.of("")),
-                    }),
+              return yield* $.div(
+                { class: "form-control mb-4" },
+                $.label({ class: "label" }, $.span({ class: "label-text" }, "Title")),
+                $.input({
+                  class: Readable.map(hasError, (err) =>
+                    err ? "input input-bordered input-error w-full" : "input input-bordered w-full",
                   ),
-                );
-              }),
+                  value: titleField.value,
+                  onInput: (e) => titleField.set((e.target as HTMLInputElement).value),
+                  onBlur: () => titleField.blur(),
+                }),
+                when(hasError, {
+                  onTrue: () =>
+                    $.span({ class: "label-text-alt text-error mt-1" }, "Title is required"),
+                  onFalse: () => $.span({}, ""),
+                }),
+              );
+            }),
 
-              // Description field
-              Effect.gen(function* () {
-                const descField = yield* CardEditForm.fields.description;
+            // Description field
+            Effect.gen(function* () {
+              const descField = yield* CardEditForm.fields.description;
 
-                return yield* $.div(
-                  { class: "form-control mb-4" },
-                  collect(
-                    $.label({ class: "label" }, $.span({ class: "label-text" }, $.of("Description"))),
-                    $.textarea({
-                      class: "textarea textarea-bordered w-full h-24",
-                      placeholder: "Add a description...",
-                      value: descField.value,
-                      onInput: (e) => descField.set((e.target as HTMLTextAreaElement).value),
-                    }),
-                  ),
-                );
-              }),
+              return yield* $.div(
+                { class: "form-control mb-4" },
+                $.label({ class: "label" }, $.span({ class: "label-text" }, "Description")),
+                $.textarea({
+                  class: "textarea textarea-bordered w-full h-24",
+                  placeholder: "Add a description...",
+                  value: descField.value,
+                  onInput: (e) => descField.set((e.target as HTMLTextAreaElement).value),
+                }),
+              );
+            }),
 
-              // Priority field
-              Effect.gen(function* () {
-                const priorityField = yield* CardEditForm.fields.priority;
+            // Priority field
+            Effect.gen(function* () {
+              const priorityField = yield* CardEditForm.fields.priority;
 
-                return yield* $.div(
-                  { class: "form-control mb-4" },
-                  collect(
-                    $.label({ class: "label" }, $.span({ class: "label-text" }, $.of("Priority"))),
-                    $.select(
-                      {
-                        class: "select select-bordered w-full",
-                        value: Readable.map(priorityField.value, (v) => v ?? ""),
-                        onChange: (e) => {
-                          const val = (e.target as HTMLSelectElement).value;
-                          return priorityField.set(val === "" ? null : (val as "low" | "medium" | "high"));
-                        },
-                      },
-                      collect(
-                        $.option({ value: "" }, $.of("None")),
-                        $.option({ value: "low" }, $.of("Low")),
-                        $.option({ value: "medium" }, $.of("Medium")),
-                        $.option({ value: "high" }, $.of("High")),
-                      ),
-                    ),
-                  ),
-                );
-              }),
-
-              // Actions
-              $.div(
-                { class: "modal-action justify-between" },
-                collect(
-                  $.button(
-                    {
-                      type: "button",
-                      class: "btn btn-error btn-outline",
-                      onClick: () => props.handleDelete(),
+              return yield* $.div(
+                { class: "form-control mb-4" },
+                $.label({ class: "label" }, $.span({ class: "label-text" }, "Priority")),
+                $.select(
+                  {
+                    class: "select select-bordered w-full",
+                    value: Readable.map(priorityField.value, (v) => v ?? ""),
+                    onChange: (e) => {
+                      const val = (e.target as HTMLSelectElement).value;
+                      return priorityField.set(val === "" ? null : (val as "low" | "medium" | "high"));
                     },
-                    $.of("Delete"),
-                  ),
-                  $.div(
-                    { class: "flex gap-2" },
-                    collect(
-                      $.button(
-                        {
-                          type: "button",
-                          class: "btn btn-ghost",
-                          onClick: () => props.handleClose(),
-                        },
-                        $.of("Cancel"),
-                      ),
-                      $.button(
-                        { type: "submit", class: "btn btn-primary" },
-                        $.of("Save"),
-                      ),
-                    ),
-                  ),
+                  },
+                  $.option({ value: "" }, "None"),
+                  $.option({ value: "low" }, "Low"),
+                  $.option({ value: "medium" }, "Medium"),
+                  $.option({ value: "high" }, "High"),
+                ),
+              );
+            }),
+
+            // Actions
+            $.div(
+              { class: "modal-action justify-between" },
+              $.button(
+                {
+                  type: "button",
+                  class: "btn btn-error btn-outline",
+                  onClick: () => props.handleDelete(),
+                },
+                "Delete",
+              ),
+              $.div(
+                { class: "flex gap-2" },
+                $.button(
+                  {
+                    type: "button",
+                    class: "btn btn-ghost",
+                    onClick: () => props.handleClose(),
+                  },
+                  "Cancel",
+                ),
+                $.button(
+                  { type: "submit", class: "btn btn-primary" },
+                  "Save",
                 ),
               ),
             ),

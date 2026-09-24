@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect";
 
-import { $, collect, Portal, Readable, redraw, when } from "@stax-ui/dom";
+import { $, Portal, Readable, redraw, when } from "@stax-ui/dom";
 import { Field, Form } from "@stax-ui/form";
 
 import { KanbanService } from "../services/KanbanService.js";
@@ -62,6 +62,7 @@ export const CardDetailDialog = () =>
           },
         },
         redraw(kanban.selectedCard, {
+          container: () => $.div({ class: "modal-box" }),
           render: (card) =>
             Effect.gen(function* () {
               if (!card) return yield* $.div();
@@ -76,141 +77,120 @@ export const CardDetailDialog = () =>
                   onSubmit: handleSubmit,
                 },
                 $.form(
-                  { class: "modal-box" },
-                  collect(
-                    // Title field
-                    Effect.gen(function* () {
-                      const titleField = yield* CardEditForm.fields.title;
-                      const hasError = Readable.map(
-                        titleField.errors,
-                        (e) => e.length > 0,
-                      );
+                  // Title field
+                  Effect.gen(function* () {
+                    const titleField = yield* CardEditForm.fields.title;
+                    const hasError = Readable.map(
+                      titleField.errors,
+                      (e) => e.length > 0,
+                    );
 
-                      return yield* $.div(
-                        { class: "form-control mb-4" },
-                        collect(
-                          $.label(
-                            { class: "label" },
-                            $.span({ class: "label-text" }, $.of("Title")),
-                          ),
-                          $.input({
-                            class: Readable.map(hasError, (err) =>
-                              err
-                                ? "input input-bordered input-error w-full"
-                                : "input input-bordered w-full",
-                            ),
-                            value: titleField.value,
-                            onInput: (e) =>
-                              titleField.set(
-                                (e.target as HTMLInputElement).value,
-                              ),
-                            onBlur: () => titleField.blur(),
-                          }),
-                          when(hasError, {
-                            onTrue: () =>
-                              $.span(
-                                { class: "label-text-alt text-error mt-1" },
-                                $.of("Title is required"),
-                              ),
-                            onFalse: () => $.span({}, $.of("")),
-                          }),
+                    return yield* $.div(
+                      { class: "form-control mb-4" },
+                      $.label(
+                        { class: "label" },
+                        $.span({ class: "label-text" }, "Title"),
+                      ),
+                      $.input({
+                        class: Readable.map(hasError, (err) =>
+                          err
+                            ? "input input-bordered input-error w-full"
+                            : "input input-bordered w-full",
                         ),
-                      );
-                    }),
-
-                    // Description field
-                    Effect.gen(function* () {
-                      const descField = yield* CardEditForm.fields.description;
-
-                      return yield* $.div(
-                        { class: "form-control mb-4" },
-                        collect(
-                          $.label(
-                            { class: "label" },
-                            $.span(
-                              { class: "label-text" },
-                              $.of("Description"),
-                            ),
+                        value: titleField.value,
+                        onInput: (e) =>
+                          titleField.set((e.target as HTMLInputElement).value),
+                        onBlur: () => titleField.blur(),
+                      }),
+                      when(hasError, {
+                        onTrue: () =>
+                          $.span(
+                            { class: "label-text-alt text-error mt-1" },
+                            "Title is required",
                           ),
-                          $.textarea({
-                            class: "textarea textarea-bordered w-full h-24",
-                            placeholder: "Add a description...",
-                            value: descField.value,
-                            onInput: (e) =>
-                              descField.set(
-                                (e.target as HTMLTextAreaElement).value,
-                              ),
-                          }),
-                        ),
-                      );
-                    }),
+                        onFalse: () => $.span({}, ""),
+                      }),
+                    );
+                  }),
 
-                    // Priority field
-                    Effect.gen(function* () {
-                      const priorityField = yield* CardEditForm.fields.priority;
+                  // Description field
+                  Effect.gen(function* () {
+                    const descField = yield* CardEditForm.fields.description;
 
-                      return yield* $.div(
-                        { class: "form-control mb-4" },
-                        collect(
-                          $.label(
-                            { class: "label" },
-                            $.span({ class: "label-text" }, $.of("Priority")),
+                    return yield* $.div(
+                      { class: "form-control mb-4" },
+                      $.label(
+                        { class: "label" },
+                        $.span({ class: "label-text" }, "Description"),
+                      ),
+                      $.textarea({
+                        class: "textarea textarea-bordered w-full h-24",
+                        placeholder: "Add a description...",
+                        value: descField.value,
+                        onInput: (e) =>
+                          descField.set(
+                            (e.target as HTMLTextAreaElement).value,
                           ),
-                          $.select(
-                            {
-                              class: "select select-bordered w-full",
-                              value: Readable.map(
-                                priorityField.value,
-                                (v) => v ?? "",
-                              ),
-                              onChange: (e) => {
-                                const val = (e.target as HTMLSelectElement)
-                                  .value;
-                                return priorityField.set(
-                                  val === "" ? null : (val as Priority),
-                                );
-                              },
-                            },
-                            collect(
-                              $.option({ value: "" }, $.of("None")),
-                              $.option({ value: "low" }, $.of("Low")),
-                              $.option({ value: "medium" }, $.of("Medium")),
-                              $.option({ value: "high" }, $.of("High")),
-                            ),
-                          ),
-                        ),
-                      );
-                    }),
+                      }),
+                    );
+                  }),
 
-                    // Actions
-                    $.div(
-                      { class: "modal-action justify-between" },
-                      collect(
-                        $.button(
-                          {
-                            type: "button",
-                            class: "btn btn-error btn-outline",
-                            onClick: () => handleDelete(),
+                  // Priority field
+                  Effect.gen(function* () {
+                    const priorityField = yield* CardEditForm.fields.priority;
+
+                    return yield* $.div(
+                      { class: "form-control mb-4" },
+                      $.label(
+                        { class: "label" },
+                        $.span({ class: "label-text" }, "Priority"),
+                      ),
+                      $.select(
+                        {
+                          class: "select select-bordered w-full",
+                          value: Readable.map(
+                            priorityField.value,
+                            (v) => v ?? "",
+                          ),
+                          onChange: (e) => {
+                            const val = (e.target as HTMLSelectElement).value;
+                            return priorityField.set(
+                              val === "" ? null : (val as Priority),
+                            );
                           },
-                          $.of("Delete"),
-                        ),
-                        $.div(
-                          { class: "flex gap-2" },
-                          collect(
-                            $.button(
-                              {
-                                type: "button",
-                                class: "btn btn-ghost",
-                                onClick: () => handleClose(),
-                              },
-                              $.of("Cancel"),
-                            ),
-                            $.button(
-                              { type: "submit", class: "btn btn-primary" },
-                              $.of("Save"),
-                            ),
-                          ),
-                        ),
+                        },
+                        $.option({ value: "" }, "None"),
+                        $.option({ value: "low" }, "Low"),
+                        $.option({ value: "medium" }, "Medium"),
+                        $.option({ value: "high" }, "High"),
+                      ),
+                    );
+                  }),
+
+                  // Actions
+                  $.div(
+                    { class: "modal-action justify-between" },
+                    $.button(
+                      {
+                        type: "button",
+                        class: "btn btn-error btn-outline",
+                        onClick: () => handleDelete(),
+                      },
+                      "Delete",
+                    ),
+                    $.div(
+                      { class: "flex gap-2" },
+                      $.button(
+                        {
+                          type: "button",
+                          class: "btn btn-ghost",
+                          onClick: () => handleClose(),
+                        },
+                        "Cancel",
+                      ),
+                      $.button(
+                        { type: "submit", class: "btn btn-primary" },
+                        "Save",
                       ),
                     ),
                   ),

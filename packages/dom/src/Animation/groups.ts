@@ -11,23 +11,24 @@
  * const App = () =>
  *   Effect.gen(function* () {
  *     const [greeting, name, tagline] = yield* Animation.sequence(3);
- *     return $.div({}, collect(
+ *     return $.div(
+ *       {},
  *       each(greetingLetters, {
  *         key: (l) => l.id,
- *         render: (l) => $.span({}, $.of(l.char)),
+ *         render: (l) => $.span({}, l.char),
  *         animate: { enter: "letter-in", stagger: stagger(40), group: greeting },
  *       }),
  *       each(nameLetters, {
  *         key: (l) => l.id,
- *         render: (l) => $.span({}, $.of(l.char)),
+ *         render: (l) => $.span({}, l.char),
  *         animate: { enter: "letter-in", stagger: stagger(40), group: name },
  *       }),
  *       each(taglineLetters, {
  *         key: (l) => l.id,
- *         render: (l) => $.span({}, $.of(l.char)),
+ *         render: (l) => $.span({}, l.char),
  *         animate: { enter: "letter-in", stagger: stagger(40), group: tagline },
  *       }),
- *     ));
+ *     );
  *   });
  * ```
  *

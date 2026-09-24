@@ -1,6 +1,6 @@
 import { Effect } from "effect";
 
-import { $, collect, each, Readable } from "@stax-ui/dom";
+import { $, each, Readable } from "@stax-ui/dom";
 
 import { KanbanService } from "../services/KanbanService.js";
 import type { Column as ColumnType } from "../types.js";
@@ -61,27 +61,24 @@ export const Column = (props: { column: ColumnType }) =>
             yield* kanban.hoverColumnId.set(null);
           }),
       },
-      collect(
+      $.div(
+        { class: "flex justify-between" },
+        $.h2({ class: "font-bold text-lg mb-4" }, column.title),
         $.div(
-          { class: "flex justify-between" },
-          collect(
-            $.h2({ class: "font-bold text-lg mb-4" }, $.of(column.title)),
-            $.div(
-              { class: "badge badge-neutral text-sm" },
-              $.of(Readable.map(columnCards, (cards) => cards.length)),
-            ),
-          ),
+          { class: "badge badge-neutral text-sm" },
+          Readable.map(columnCards, (cards) => cards.length),
         ),
-        each(columnCards, {
-          key: (card) => Effect.runSync(card.id.get),
-          container: () => $.div({ class: "space-y-2" }),
-          render: (card) => Card({ card }),
-          animate: {
-            enterFrom: "card-enter",
-            enter: "card-enter-active",
-          },
-        }),
-        AddCardForm({ status: column.id }),
       ),
+      each(columnCards, {
+        key: (card) => Effect.runSync(card.id.get),
+        container: () => $.div({ class: "space-y-2" }),
+        render: (card) => Card({ card }),
+        animate: {
+          enterFrom: "card-enter",
+          enter: "transition-all duration-300",
+          enterTo: "card-enter-active",
+        },
+      }),
+      AddCardForm({ status: column.id }),
     );
   });

@@ -1,6 +1,6 @@
 import { Effect } from "effect";
 
-import { $, collect, Readable } from "@stax-ui/dom";
+import { $, Readable } from "@stax-ui/dom";
 
 export interface Todo {
   id: number;
@@ -36,29 +36,27 @@ export const TodoItem = (props: TodoItemProps) =>
         },
         $.div(
           { class: "flex items-center gap-2 p-2" },
-          collect(
-            $.input({
-              class: "checkbox checkbox-primary",
-              type: "checkbox",
-              checked: completed,
-              onChange: () =>
+          $.input({
+            class: "checkbox checkbox-primary",
+            type: "checkbox",
+            checked: completed,
+            onChange: () =>
+              Effect.gen(function* () {
+                const todoId = yield* id.get;
+                yield* props.onToggle(todoId);
+              }),
+          }),
+          $.span({ class: textClass }, text),
+          $.button(
+            {
+              class: "btn btn-ghost btn-xs opacity-0 group-hover:opacity-100",
+              onClick: () =>
                 Effect.gen(function* () {
                   const todoId = yield* id.get;
-                  yield* props.onToggle(todoId);
+                  yield* props.onDelete(todoId);
                 }),
-            }),
-            $.span({ class: textClass }, $.of(text)),
-            $.button(
-              {
-                class: "btn btn-ghost btn-xs opacity-0 group-hover:opacity-100",
-                onClick: () =>
-                  Effect.gen(function* () {
-                    const todoId = yield* id.get;
-                    yield* props.onDelete(todoId);
-                  }),
-              },
-              $.of("✕"),
-            ),
+            },
+            "✕",
           ),
         ),
       ),

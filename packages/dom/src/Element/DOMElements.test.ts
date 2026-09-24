@@ -72,7 +72,7 @@ describe("DOMElements", () => {
         const el = yield* div(
           { class: "parent" },
           Effect.gen(function* () {
-            const child = yield* span(of("Nested"));
+            const child = yield* span("Nested");
             return child;
           }),
         );

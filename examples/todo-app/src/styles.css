@@ -18,7 +18,7 @@
 }
 
 /* When enterFrom is also present, override to collapsed state */
-.todo-item-enter-active.todo-item-enter {
+.todo-item-enter {
   grid-template-rows: 0fr;
   opacity: 0;
 }

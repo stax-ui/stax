@@ -29,7 +29,7 @@ import { Context, Effect } from "effect";
  *   { class: "app" },
  *   provide(ThemeCtx, { color: "blue" }, collect(
  *     ThemedButton({}),
- *     ThemedText({}, $.of("Hello")),
+ *     ThemedText({}, "Hello"),
  *   ))
  * )
  * ```
