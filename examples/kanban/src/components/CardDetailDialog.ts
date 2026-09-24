@@ -62,6 +62,7 @@ export const CardDetailDialog = () =>
           },
         },
         redraw(kanban.selectedCard, {
+          container: () => $.div({ class: "modal-box" }),
           render: (card) =>
             Effect.gen(function* () {
               if (!card) return yield* $.div();
@@ -76,7 +77,6 @@ export const CardDetailDialog = () =>
                   onSubmit: handleSubmit,
                 },
                 $.form(
-                  { class: "modal-box" },
                   // Title field
                   Effect.gen(function* () {
                     const titleField = yield* CardEditForm.fields.title;

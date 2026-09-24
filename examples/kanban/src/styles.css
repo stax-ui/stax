@@ -32,7 +32,7 @@
     opacity 200ms ease-out;
 }
 
-.card-enter-active.card-enter {
+.card-enter {
   grid-template-rows: 0fr;
   opacity: 0;
 }

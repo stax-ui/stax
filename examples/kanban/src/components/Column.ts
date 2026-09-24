@@ -75,7 +75,8 @@ export const Column = (props: { column: ColumnType }) =>
         render: (card) => Card({ card }),
         animate: {
           enterFrom: "card-enter",
-          enter: "card-enter-active",
+          enter: "transition-all duration-300",
+          enterTo: "card-enter-active",
         },
       }),
       AddCardForm({ status: column.id }),
