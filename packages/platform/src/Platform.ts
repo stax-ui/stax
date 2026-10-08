@@ -13,9 +13,6 @@
  * @module
  */
 
-import * as fs from "node:fs/promises";
-import * as path from "node:path";
-
 import {
   HttpRouter,
   HttpServerRequest,
@@ -976,7 +973,15 @@ export const buildStaticSite = (
       rendered.push({ url: "/__404__", html: fullHtml });
     }
 
-    // Write all files to disk
+    // Write all files to disk. The `node:fs/promises` and `node:path`
+    // imports are deferred to inside this closure (and this closure
+    // only runs server-side) so bundlers can tree-shake them out of
+    // client builds that reach into Platform.ts via the shared
+    // namespace export. See #163.
+    const [fs, path] = yield* Effect.promise(() =>
+      Promise.all([import("node:fs/promises"), import("node:path")]),
+    );
+
     yield* Effect.forEach(
       rendered,
       (page) =>

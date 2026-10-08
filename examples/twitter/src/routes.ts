@@ -1,7 +1,7 @@
 import { Effect, Schema } from "effect";
 
 import { $ } from "@stax-ui/dom";
-import { RedirectError } from "@stax-ui/platform";
+import { RedirectError } from "@stax-ui/platform/server";
 import { Route, Router } from "@stax-ui/router";
 
 import { AppLayout } from "./components/AppLayout.js";
