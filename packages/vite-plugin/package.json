@@ -1,6 +1,6 @@
 {
   "name": "@stax-ui/vite-plugin",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Vite plugin for Stax applications",
   "type": "module",
   "license": "MPL-2.0",
