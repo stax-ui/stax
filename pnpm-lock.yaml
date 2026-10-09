@@ -256,9 +256,6 @@ importers:
       daisyui:
         specifier: ^5.5.18
         version: 5.7.22
-      tsx:
-        specifier: ^4.19.0
-        version: 4.23.12
       typescript:
         specifier: ~5.9.3
         version: 5.9.3
@@ -5303,6 +5300,7 @@ snapshots:
       esbuild: 0.28.2
     optionalDependencies:
       fsevents: 2.3.3
+    optional: true
 
   type-check@0.4.0:
     dependencies:
