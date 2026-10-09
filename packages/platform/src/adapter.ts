@@ -57,6 +57,29 @@ export interface SsrEntryContext {
 }
 
 /**
+ * Build-time preferences the adapter contributes to the client bundle
+ * step. The plugin reads these and merges them into Vite's build config.
+ *
+ * None of the fields are required — defaults match the Node adapter's
+ * convention (stable `client.js` at `dist/client/`), which the SSG
+ * adapter overrides for its hashed-assets-at-dist/ layout.
+ */
+export interface ClientBuildOptions {
+  /** Where the client bundle lands. Defaults to `"dist/client"`. */
+  readonly outDir?: string;
+  /**
+   * Rollup `output.entryFileNames` pattern. Defaults to `"client.js"`
+   * for the Node adapter (stable name the server bundle references).
+   * SSG adapter leaves it unset so Vite uses its hashed default
+   * (`assets/[name]-[hash].js`), paired with `manifest: true` so the
+   * SSG runtime can resolve the hashed URL from `.vite/manifest.json`.
+   */
+  readonly entryFileNames?: string;
+  /** Enable Vite's `.vite/manifest.json` emission. Defaults to `false`. */
+  readonly manifest?: boolean;
+}
+
+/**
  * Describes a deploy target for a Stax app.
  *
  * The adapter contributes code at build time via `ssrEntryModule`, which
@@ -82,4 +105,36 @@ export interface StaxAdapter {
    * - provides `userApp.AppLayer` if present.
    */
   readonly ssrEntryModule: (ctx: SsrEntryContext) => string;
+
+  /**
+   * Build-time preferences for the CLIENT bundle step. See
+   * `ClientBuildOptions`. Leave unset to accept the Node-adapter
+   * defaults.
+   */
+  readonly clientBuildOptions?: ClientBuildOptions;
+
+  /**
+   * Called by the plugin after the SSR build completes. Lets the
+   * adapter run post-build work (e.g. SSG writing HTML files) when
+   * the synthesized entry can't do everything inside the SSR bundle
+   * itself. Optional — the Node adapter doesn't need this.
+   */
+  readonly afterSsrBuild?: (ctx: AfterSsrBuildContext) => Promise<void>;
+}
+
+/**
+ * Context the plugin hands to `adapter.afterSsrBuild` after the SSR
+ * build output is written to disk. The adapter may dynamically import
+ * `ssrEntryPath` to execute whatever the synthesized module does at
+ * build time (e.g. generate static HTML files).
+ */
+export interface AfterSsrBuildContext {
+  /** Absolute path to the emitted SSR entry file. */
+  readonly ssrEntryPath: string;
+  /** Absolute path to the project root. */
+  readonly projectRoot: string;
+  /** Absolute path to the resolved client build output dir. */
+  readonly clientOutDir: string;
+  /** Absolute path to the resolved SSR build output dir. */
+  readonly serverOutDir: string;
 }

@@ -49,6 +49,16 @@
       "types": "./dist/node-adapter-runtime.d.ts",
       "import": "./dist/node-adapter-runtime.js",
       "require": "./dist/node-adapter-runtime.cjs"
+    },
+    "./ssg-adapter": {
+      "types": "./dist/ssg-adapter.d.ts",
+      "import": "./dist/ssg-adapter.js",
+      "require": "./dist/ssg-adapter.cjs"
+    },
+    "./ssg-adapter/runtime": {
+      "types": "./dist/ssg-adapter-runtime.d.ts",
+      "import": "./dist/ssg-adapter-runtime.js",
+      "require": "./dist/ssg-adapter-runtime.cjs"
     }
   },
   "files": [

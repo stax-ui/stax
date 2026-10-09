@@ -62,6 +62,13 @@ export const nodeAdapter = (options: NodeAdapterOptions = {}): StaxAdapter => {
 
   return {
     name: "node",
+    clientBuildOptions: {
+      // Stable name because the generated server bundle hard-codes
+      // `/client.js` in `document.scripts` and in its static-file serving
+      // path. The Node server doesn't read a manifest at runtime.
+      outDir: "dist/client",
+      entryFileNames: "client.js",
+    },
     ssrEntryModule: (ctx) => {
       const appImport = JSON.stringify(ctx.appModuleId);
       const scriptsLit = JSON.stringify([clientScript, ...ctx.scripts]);

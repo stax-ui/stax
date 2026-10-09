@@ -30,6 +30,14 @@ export default defineConfig({
         __dirname,
         "packages/platform/src/node-adapter.ts",
       ),
+      "@stax-ui/platform/ssg-adapter/runtime": resolve(
+        __dirname,
+        "packages/platform/src/ssg-adapter-runtime.ts",
+      ),
+      "@stax-ui/platform/ssg-adapter": resolve(
+        __dirname,
+        "packages/platform/src/ssg-adapter.ts",
+      ),
       "@stax-ui/platform": resolve(__dirname, "packages/platform/src/index.ts"),
     },
   },

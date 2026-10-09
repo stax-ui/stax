@@ -25,8 +25,10 @@
 
 export {
   nodeAdapter,
+  ssgAdapter,
   staxPlatform,
   type NodeAdapterOptions,
+  type SsgAdapterOptions,
   type SsrEntryContext,
   type StaxAdapter,
   type StaxPlatformOptions,

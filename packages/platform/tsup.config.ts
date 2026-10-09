@@ -7,6 +7,8 @@ export default defineConfig({
     server: "src/server.ts",
     "node-adapter": "src/node-adapter.ts",
     "node-adapter-runtime": "src/node-adapter-runtime.ts",
+    "ssg-adapter": "src/ssg-adapter.ts",
+    "ssg-adapter-runtime": "src/ssg-adapter-runtime.ts",
   },
   format: ["esm", "cjs"],
   dts: true,
