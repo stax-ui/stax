@@ -12,6 +12,15 @@
       "@stax-ui/dom/hydrate": ["packages/dom/src/Render/hydrate/index.ts"],
       "@stax-ui/router": ["packages/router/src/index.ts"],
       "@stax-ui/form": ["packages/form/src/index.ts"],
+      "@stax-ui/platform": ["packages/platform/src/index.ts"],
+      "@stax-ui/platform/client": ["packages/platform/src/client.ts"],
+      "@stax-ui/platform/server": ["packages/platform/src/server.ts"],
+      "@stax-ui/platform/node-adapter": [
+        "packages/platform/src/node-adapter.ts"
+      ],
+      "@stax-ui/platform/node-adapter/runtime": [
+        "packages/platform/src/node-adapter-runtime.ts"
+      ],
       "@stax-ui/vite-plugin": ["packages/vite-plugin/src/index.ts"]
     }
   },
