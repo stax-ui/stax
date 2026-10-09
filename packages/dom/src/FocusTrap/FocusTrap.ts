@@ -25,6 +25,13 @@ export interface FocusTrapOptions {
 }
 
 /**
+ * Marker attribute set on sentinel guard elements so the focusin fallback
+ * knows to ignore focus landing on them — the guards' own focus handlers
+ * do the right thing, and we don't want the fallback to race them.
+ */
+const GUARD_ATTR = "data-stax-focus-guard";
+
+/**
  * Get all focusable elements within a container.
  */
 const getFocusableElements = (container: HTMLElement): HTMLElement[] => {
@@ -33,8 +40,52 @@ const getFocusableElements = (container: HTMLElement): HTMLElement[] => {
     (el) =>
       !el.hasAttribute("disabled") &&
       el.getAttribute("aria-hidden") !== "true" &&
+      !el.hasAttribute(GUARD_ATTR) &&
       el.offsetParent !== null, // Element is visible
   );
+};
+
+/**
+ * Create an invisible, focusable sentinel. Browser Tab navigation lands
+ * on it before any focus actually leaves the container, so we can redirect
+ * cleanly instead of catching the escape after the fact.
+ */
+const makeGuard = (): HTMLDivElement => {
+  const guard = document.createElement("div");
+  guard.tabIndex = 0;
+  guard.setAttribute(GUARD_ATTR, "");
+  guard.setAttribute("aria-hidden", "true");
+  // position:fixed keeps it out of flow; width/height 1px + opacity 0 keeps
+  // it non-visible but still focusable (display:none / visibility:hidden
+  // would strip it from the focus chain entirely).
+  guard.style.cssText =
+    "position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;pointer-events:none;";
+  return guard;
+};
+
+/**
+ * Mark every sibling of the container's ancestor chain (up to and
+ * including `document.body`'s children) as `inert`, so screen-reader
+ * virtual cursors and pointer input can't reach anything outside the
+ * trap. Returns the list of elements we actually set so the finalizer
+ * can un-set only those — elements the caller or another layer had
+ * already marked inert stay inert on cleanup.
+ */
+const markSiblingsInert = (container: HTMLElement): HTMLElement[] => {
+  const inerted: HTMLElement[] = [];
+  let node: Element | null = container;
+  while (node && node.parentElement) {
+    for (const sibling of Array.from(node.parentElement.children)) {
+      if (sibling === node) continue;
+      if (!(sibling instanceof HTMLElement)) continue;
+      if (sibling.inert) continue;
+      sibling.inert = true;
+      inerted.push(sibling);
+    }
+    if (node.parentElement === document.body) break;
+    node = node.parentElement;
+  }
+  return inerted;
 };
 
 /**
@@ -43,6 +94,12 @@ const getFocusableElements = (container: HTMLElement): HTMLElement[] => {
  * The focus trap:
  * - Focuses the first focusable element (or initialFocus) when activated
  * - Cycles focus with Tab/Shift+Tab at boundaries
+ * - Marks every sibling of the container's ancestor chain as `inert`,
+ *   so screen-reader virtual cursors and pointer input can't reach
+ *   content outside the trap
+ * - Inserts invisible focus-guard sentinels before and after the
+ *   container so Tab from browser chrome / programmatic focus moves
+ *   get redirected back in cleanly
  * - Restores focus to the previously focused element when deactivated
  * - Automatically cleans up when the scope closes
  *
@@ -68,7 +125,39 @@ export const FocusTrap = {
       const previouslyFocused =
         returnFocus ?? (document.activeElement as HTMLElement | null);
 
-      // Keydown handler to trap Tab key
+      // 1. Inert the rest of the page. Do this BEFORE inserting the
+      //    guards, otherwise the guards would land in the sibling scan
+      //    and get marked inert themselves — which would make them
+      //    unfocusable and defeat the whole point.
+      const inerted = markSiblingsInert(container);
+
+      // 2. Insert sentinel guards as the container's immediate siblings.
+      //    Focus landing on the before-guard means Shift+Tab out of
+      //    first focusable → wrap to last; after-guard means Tab out
+      //    of last → wrap to first.
+      const parent = container.parentElement;
+      const beforeGuard = makeGuard();
+      const afterGuard = makeGuard();
+      if (parent) {
+        parent.insertBefore(beforeGuard, container);
+        parent.insertBefore(afterGuard, container.nextSibling);
+      }
+
+      const handleBeforeGuardFocus = () => {
+        const focusables = getFocusableElements(container);
+        focusables[focusables.length - 1]?.focus({ preventScroll: true });
+      };
+      const handleAfterGuardFocus = () => {
+        const focusables = getFocusableElements(container);
+        focusables[0]?.focus({ preventScroll: true });
+      };
+      beforeGuard.addEventListener("focus", handleBeforeGuardFocus);
+      afterGuard.addEventListener("focus", handleAfterGuardFocus);
+
+      // 3. Keydown handler for in-container Tab wrapping. The guards
+      //    handle Tab-out, but a user tabbing *between* focusables
+      //    inside the container should wrap at the boundaries without
+      //    bouncing through a guard.
       const handleKeyDown = (event: KeyboardEvent) => {
         if (event.key !== "Tab") return;
 
@@ -96,9 +185,16 @@ export const FocusTrap = {
         }
       };
 
-      // Focus handler to prevent focus from escaping
+      // 4. Document-level focusin fallback. Catches programmatic focus
+      //    moves that bypass Tab navigation entirely (e.g. a click
+      //    handler calling .focus() on something outside the container).
+      //    Must skip our own guard elements — their dedicated handlers
+      //    do the right thing, and we don't want to race them.
       const handleFocusIn = (event: FocusEvent) => {
-        if (!container.contains(event.target as Node)) {
+        const target = event.target as Element | null;
+        if (!target) return;
+        if (target === beforeGuard || target === afterGuard) return;
+        if (!container.contains(target as Node)) {
           event.stopPropagation();
           const focusableElements = getFocusableElements(container);
           if (focusableElements.length > 0) {
@@ -107,11 +203,10 @@ export const FocusTrap = {
         }
       };
 
-      // Add event listeners
       container.addEventListener("keydown", handleKeyDown);
       document.addEventListener("focusin", handleFocusIn);
 
-      // Focus initial element
+      // 5. Focus the initial element.
       const focusableElements = getFocusableElements(container);
       if (initialFocus && container.contains(initialFocus)) {
         initialFocus.focus({ preventScroll: true });
@@ -128,6 +223,20 @@ export const FocusTrap = {
         Effect.sync(() => {
           container.removeEventListener("keydown", handleKeyDown);
           document.removeEventListener("focusin", handleFocusIn);
+
+          // Un-inert only the elements we marked. Anything the caller
+          // or another layer had set stays set.
+          for (const el of inerted) {
+            el.inert = false;
+          }
+
+          // Remove sentinels + their listeners (removing the node
+          // disconnects the listeners too, but being explicit keeps
+          // the intent clear).
+          beforeGuard.removeEventListener("focus", handleBeforeGuardFocus);
+          afterGuard.removeEventListener("focus", handleAfterGuardFocus);
+          beforeGuard.remove();
+          afterGuard.remove();
 
           // Restore focus to previously focused element
           if (
