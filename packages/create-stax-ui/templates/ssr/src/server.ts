@@ -12,7 +12,7 @@ import { HttpRouter, HttpServer } from "@effect/platform";
 import { NodeHttpServer, NodeRuntime } from "@effect/platform-node";
 import { Effect, Layer } from "effect";
 
-import { Platform } from "@stax-ui/platform";
+import { toHttpRoutes } from "@stax-ui/platform/server";
 
 import { App } from "./App.js";
 import { router } from "./routes.js";
@@ -21,7 +21,7 @@ import { serveStatic } from "./serveStatic.js";
 const port = Number(process.env.PORT) || 3000;
 const distDir = path.resolve(process.cwd(), "dist");
 
-const staxRoutes = Platform.toHttpRoutes(router, {
+const staxRoutes = toHttpRoutes(router, {
   app: App,
   document: {
     title: "Stax App",

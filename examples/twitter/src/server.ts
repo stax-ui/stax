@@ -4,14 +4,14 @@ import { HttpRouter, HttpServer, HttpServerResponse } from "@effect/platform";
 import { NodeHttpServer, NodeRuntime } from "@effect/platform-node";
 import { Layer } from "effect";
 
-import { Platform } from "@stax-ui/platform";
+import { toHttpRoutes } from "@stax-ui/platform/server";
 
 import { App } from "./App.js";
 import { router } from "./routes.js";
 import { PostService, PostServiceLive } from "./services/PostService.js";
 
 // Build stax HTTP routes from the router
-const staxRoutes = Platform.toHttpRoutes(router, {
+const staxRoutes = toHttpRoutes(router, {
   app: App,
   document: {
     title: "Twitter Demo",

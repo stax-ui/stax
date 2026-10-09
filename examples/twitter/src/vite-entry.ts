@@ -8,13 +8,13 @@
 import { HttpApp, HttpRouter } from "@effect/platform";
 import { Layer } from "effect";
 
-import { Platform } from "@stax-ui/platform";
+import { toHttpRoutes } from "@stax-ui/platform/server";
 
 import { App } from "./App.js";
 import { router } from "./routes.js";
 import { PostService, PostServiceLive } from "./services/PostService.js";
 
-const staxRoutes = Platform.toHttpRoutes(router, {
+const staxRoutes = toHttpRoutes(router, {
   app: App,
   document: {
     title: "Twitter Demo",

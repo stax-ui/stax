@@ -7,12 +7,12 @@
 
 import { HttpApp, HttpRouter } from "@effect/platform";
 
-import { Platform } from "@stax-ui/platform";
+import { toHttpRoutes } from "@stax-ui/platform/server";
 
 import { App } from "./App.js";
 import { router } from "./routes.js";
 
-const staxRoutes = Platform.toHttpRoutes(router, {
+const staxRoutes = toHttpRoutes(router, {
   app: App,
   document: {
     title: "Stax App",
