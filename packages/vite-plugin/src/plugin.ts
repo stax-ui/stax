@@ -3,32 +3,106 @@ import * as path from "node:path";
 
 import type { Plugin, ViteDevServer } from "vite";
 
+import type { StaxAdapter } from "@stax-ui/platform/node-adapter";
+
+export {
+  nodeAdapter,
+  type NodeAdapterOptions,
+} from "@stax-ui/platform/node-adapter";
+export type {
+  StaxAdapter,
+  SsrEntryContext,
+} from "@stax-ui/platform/node-adapter";
+
 /**
  * Options for the Stax Platform Vite plugin.
+ *
+ * Two config shapes supported:
+ *
+ * ## New shape — framework-owned lifecycle (recommended)
+ *
+ * Pass `app`, `client`, and `adapter`. The plugin owns both dev and prod
+ * HTTP server lifecycles. The user writes `src/app.ts` exporting a
+ * `makeApp({ scripts, styles })` factory and optional `AppLayer`.
+ *
+ * ```ts
+ * staxPlatform({
+ *   app: "src/app.ts",
+ *   client: "src/client.ts",
+ *   adapter: nodeAdapter({ port: 3000 }),
+ * });
+ * ```
+ *
+ * See issue #169 for the architecture.
+ *
+ * ## Legacy shape — user-owned lifecycle (deprecated)
+ *
+ * Pass `entry`. Keeps the current behavior where the user writes
+ * `src/vite-entry.ts` (dev) + `src/server.ts` (prod) and the plugin
+ * drives dev-mode SSR via a `render(request)` export. SSG mode
+ * (`mode: "ssg"`) also uses this shape. Emits a deprecation warning on
+ * dev startup; will be removed in a future minor.
  */
 export interface StaxPlatformOptions {
+  // =====================================================================
+  // New shape
+  // =====================================================================
+
   /**
+   * Path to the user's app module. Must export:
+   * - `makeApp(opts: { scripts: readonly string[]; styles: readonly string[] }): HttpRouter`
+   * - optionally `AppLayer: Layer<unknown, unknown, unknown>`
+   *
+   * The plugin loads this module via Vite's SSR loader in dev, and
+   * bundles it as the server-side input in prod.
+   *
+   * @example "src/app.ts"
+   */
+  readonly app?: string;
+
+  /**
+   * Path to the user's client entry module. Used as the Rollup input
+   * for the client bundle, which lands at `dist/client/client.js`.
+   *
+   * @example "src/client.ts"
+   */
+  readonly client?: string;
+
+  /**
+   * The deploy-target adapter. Chooses how `vite build --ssr` emits the
+   * server bundle: `nodeAdapter()` for a Node HTTP server, `ssgAdapter()`
+   * for static site generation (follow-up PR), etc.
+   */
+  readonly adapter?: StaxAdapter;
+
+  // =====================================================================
+  // Legacy shape
+  // =====================================================================
+
+  /**
+   * **Deprecated** — use `app` + `client` + `adapter` instead.
+   *
    * Path to the SSR/SSG entry module.
    *
    * In SSR mode: exports a `render(request: Request) => Promise<Response>` function.
    * In SSG mode: exports `{ router, app?, document?, layers? }` for static site generation.
-   *
-   * When provided, the plugin runs an SSR dev server with HMR in dev mode.
-   * When omitted, only the server-code stripping transform is applied.
-   *
-   * @example "src/vite-entry.ts"
    */
   readonly entry?: string;
   /**
+   * **Deprecated — only honored with legacy `entry` config.**
+   *
    * Build mode.
    *
    * - `"ssr"` (default) — Standard SSR with live server
    * - `"ssg"` — Static site generation. After `vite build`, runs
    *   `Platform.buildStaticSite()` to pre-render all `Route.static` routes.
-   *
-   * In dev mode, both modes behave the same (SSR dev server with HMR).
    */
   readonly mode?: "ssr" | "ssg";
+
+  // =====================================================================
+  // Shared
+  // =====================================================================
+
   /**
    * File patterns to apply the server-code stripping transform to.
    * Defaults to all .ts/.tsx/.js/.jsx files.
@@ -70,25 +144,90 @@ export interface StaxPlatformOptions {
  * });
  * ```
  */
+// Virtual module ID the plugin uses as the SSR build's input when the
+// new-shape config (app + adapter) is active. The `\0` prefix marks it
+// as a Rollup-virtual id so other plugins / Vite's resolver don't fight
+// over it.
+const SSR_ENTRY_ID = "virtual:@stax-ui/platform/ssr-entry";
+const RESOLVED_SSR_ENTRY_ID = "\0" + SSR_ENTRY_ID;
+
+const isNewShape = (opts: StaxPlatformOptions): boolean =>
+  opts.app !== undefined &&
+  opts.client !== undefined &&
+  opts.adapter !== undefined;
+
 export const staxPlatform = (options: StaxPlatformOptions = {}): Plugin => {
   const include = options.include ?? /\.(tsx?|jsx?)$/;
   const exclude = options.exclude;
   const mode = options.mode ?? "ssr";
+  const newShape = isNewShape(options);
   let isSsr = false;
   let isDev = false;
   let root: string;
   let outDir: string;
   let entryPath: string | null = null;
+  // New-shape resolved paths
+  let appPath: string | null = null;
+  let clientPath: string | null = null;
+
+  // Validate — if any new-shape key is set but not all three, that's a
+  // user error worth flagging immediately rather than falling through to
+  // the legacy path.
+  if (!newShape && (options.app || options.client || options.adapter)) {
+    throw new Error(
+      "[stax-platform] `app`, `client`, and `adapter` must be used together. Got: " +
+        JSON.stringify({
+          app: options.app ?? null,
+          client: options.client ?? null,
+          adapter: options.adapter ? options.adapter.name : null,
+        }),
+    );
+  }
 
   return {
     name: "stax-platform",
 
     config(config) {
-      // Prevent the SSR build from wiping the client build's output
+      // Prevent the SSR build from wiping the client build's output.
+      // Also applies to the new shape — `vite build && vite build --ssr`
+      // runs two commands, the second must not clear the first's output.
       if (config.build?.ssr) {
+        if (newShape) {
+          return {
+            build: {
+              emptyOutDir: false,
+              outDir: "dist/server",
+              rollupOptions: {
+                input: SSR_ENTRY_ID,
+                output: {
+                  entryFileNames: "index.js",
+                },
+              },
+              ssr:
+                typeof config.build.ssr === "string" ? config.build.ssr : true,
+            },
+          };
+        }
         return {
           build: {
             emptyOutDir: false,
+          },
+        };
+      }
+
+      // Client build. In the new shape, the user's `client` entry is the
+      // Rollup input, and the client bundle lives under `dist/client/` so
+      // the Node adapter can serve it from a known subdirectory.
+      if (newShape && !config.build?.ssr) {
+        return {
+          build: {
+            outDir: "dist/client",
+            rollupOptions: {
+              input: options.client!,
+              output: {
+                entryFileNames: "client.js",
+              },
+            },
           },
         };
       }
@@ -102,6 +241,45 @@ export const staxPlatform = (options: StaxPlatformOptions = {}): Plugin => {
       if (options.entry) {
         entryPath = path.resolve(root, options.entry);
       }
+      if (newShape) {
+        appPath = path.resolve(root, options.app!);
+        clientPath = path.resolve(root, options.client!);
+      }
+
+      // Legacy-config deprecation nudge. Only warn in dev to avoid noise
+      // in CI build output.
+      if (!newShape && options.entry && isDev) {
+        console.warn(
+          "[stax-platform] The `entry` config is deprecated. Use " +
+            "`app` + `client` + `adapter` instead. See " +
+            "https://github.com/stax-ui/stax/issues/169 for migration.",
+        );
+      }
+    },
+
+    // -------------------------------------------------------------------------
+    // Virtual SSR entry (new shape only)
+    // -------------------------------------------------------------------------
+
+    resolveId(id) {
+      if (!newShape) return;
+      if (id === SSR_ENTRY_ID) return RESOLVED_SSR_ENTRY_ID;
+    },
+
+    load(id) {
+      if (!newShape) return;
+      if (id !== RESOLVED_SSR_ENTRY_ID) return;
+      // The adapter synthesizes the entire module as a string. The user's
+      // app module path becomes the `appModuleId` so the generated code
+      // imports from the right file.
+      return options.adapter!.ssrEntryModule({
+        appModuleId: appPath!,
+        scripts: [],
+        styles: [],
+        // Client bundle lives at `dist/client/`, generated entry at
+        // `dist/server/index.js`, so relative path is `../client`.
+        clientRelativeDir: "../client",
+      });
     },
 
     // -------------------------------------------------------------------------
@@ -134,10 +312,138 @@ export const staxPlatform = (options: StaxPlatformOptions = {}): Plugin => {
     },
 
     // -------------------------------------------------------------------------
-    // SSR dev server (dev mode only, when entry is provided)
+    // SSR dev server
     // -------------------------------------------------------------------------
 
     configureServer(server: ViteDevServer) {
+      // New shape — plugin owns composition. SSR-loads the user's
+      // `src/app.ts`, calls `makeApp` with dev-shape URLs, mounts.
+      if (newShape) {
+        const appAbs = appPath!;
+        const clientAbs = clientPath!;
+        // Vite serves source files at `/src/...` by convention relative to
+        // project root. The dev URL for the client entry is just the
+        // root-relative path.
+        const clientDevUrl =
+          "/" + path.relative(root, clientAbs).replace(/\\/g, "/");
+
+        return () => {
+          server.middlewares.use(async (req, res, next) => {
+            const url =
+              (req as { originalUrl?: string }).originalUrl || req.url || "/";
+            const normalizedUrl =
+              url === "/" || url === "/index.html" ? "/" : url;
+
+            if (
+              url.startsWith("/@") ||
+              url.startsWith("/__vite") ||
+              url.startsWith("/node_modules/") ||
+              url.startsWith("/src/") ||
+              (url.includes(".") && !url.endsWith("/") && url !== "/index.html")
+            ) {
+              return next();
+            }
+
+            try {
+              const [userApp, platformModule] = await Promise.all([
+                server.ssrLoadModule(appAbs),
+                server.ssrLoadModule("@effect/platform"),
+              ]);
+
+              if (typeof userApp.makeApp !== "function") {
+                throw new Error(
+                  `App module "${options.app}" must export a "makeApp(opts) => HttpApp" function.`,
+                );
+              }
+
+              const HttpApp = platformModule.HttpApp;
+              const Effect = (await server.ssrLoadModule("effect")).Effect;
+              const Layer = (await server.ssrLoadModule("effect")).Layer;
+
+              const app = userApp.makeApp({
+                scripts: [clientDevUrl],
+                styles: [],
+              });
+
+              const providedApp = userApp.AppLayer
+                ? Effect.provide(app, Layer.mergeAll(userApp.AppLayer))
+                : app;
+
+              const handler = HttpApp.toWebHandler(providedApp);
+
+              const protocol = "http";
+              const host = req.headers.host || "localhost";
+              const webUrl = new URL(normalizedUrl, `${protocol}://${host}`);
+
+              let body: string | undefined;
+              if (req.method !== "GET" && req.method !== "HEAD") {
+                body = await new Promise<string>((resolve) => {
+                  let data = "";
+                  req.on("data", (chunk: string) => (data += chunk));
+                  req.on("end", () => resolve(data));
+                });
+              }
+
+              const webRequest = new Request(webUrl.href, {
+                method: req.method,
+                headers: Object.entries(req.headers).reduce(
+                  (acc, [key, value]) => {
+                    if (value)
+                      acc[key] = Array.isArray(value)
+                        ? value.join(", ")
+                        : value;
+                    return acc;
+                  },
+                  {} as Record<string, string>,
+                ),
+                body,
+              });
+
+              const response: Response = await handler(webRequest);
+
+              res.statusCode = response.status;
+              response.headers.forEach((value, key) => {
+                res.setHeader(key, value);
+              });
+
+              const responseBody = await response.text();
+              const contentType = response.headers.get("content-type") || "";
+
+              if (contentType.includes("text/html")) {
+                const transformedHtml = await server.transformIndexHtml(
+                  normalizedUrl,
+                  responseBody,
+                );
+                res.setHeader(
+                  "content-length",
+                  Buffer.byteLength(transformedHtml),
+                );
+                res.end(transformedHtml);
+              } else {
+                res.end(responseBody);
+              }
+            } catch (e) {
+              server.ssrFixStacktrace(e as Error);
+              console.error("[stax-platform] Dev-render error:", e);
+
+              res.statusCode = 500;
+              res.setHeader("Content-Type", "text/html");
+              res.end(`
+                <!DOCTYPE html>
+                <html>
+                  <head><title>SSR Error</title></head>
+                  <body>
+                    <h1>Server Error</h1>
+                    <pre style="color: red; white-space: pre-wrap;">${escapeHtml((e as Error).stack || (e as Error).message)}</pre>
+                  </body>
+                </html>
+              `);
+            }
+          });
+        };
+      }
+
+      // Legacy shape — user owns composition via `render(request)` export.
       if (!entryPath) return;
 
       const entry = entryPath;
