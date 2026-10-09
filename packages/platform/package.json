@@ -39,6 +39,16 @@
       "types": "./dist/server.d.ts",
       "import": "./dist/server.js",
       "require": "./dist/server.cjs"
+    },
+    "./node-adapter": {
+      "types": "./dist/node-adapter.d.ts",
+      "import": "./dist/node-adapter.js",
+      "require": "./dist/node-adapter.cjs"
+    },
+    "./node-adapter/runtime": {
+      "types": "./dist/node-adapter-runtime.d.ts",
+      "import": "./dist/node-adapter-runtime.js",
+      "require": "./dist/node-adapter-runtime.cjs"
     }
   },
   "files": [

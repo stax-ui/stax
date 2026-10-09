@@ -22,6 +22,14 @@ export default defineConfig({
       "@stax-ui/dom": resolve(__dirname, "packages/dom/src/index.ts"),
       "@stax-ui/router": resolve(__dirname, "packages/router/src/index.ts"),
       "@stax-ui/form": resolve(__dirname, "packages/form/src/index.ts"),
+      "@stax-ui/platform/node-adapter/runtime": resolve(
+        __dirname,
+        "packages/platform/src/node-adapter-runtime.ts",
+      ),
+      "@stax-ui/platform/node-adapter": resolve(
+        __dirname,
+        "packages/platform/src/node-adapter.ts",
+      ),
       "@stax-ui/platform": resolve(__dirname, "packages/platform/src/index.ts"),
     },
   },

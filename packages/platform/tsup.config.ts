@@ -5,6 +5,8 @@ export default defineConfig({
     index: "src/index.ts",
     client: "src/client.ts",
     server: "src/server.ts",
+    "node-adapter": "src/node-adapter.ts",
+    "node-adapter-runtime": "src/node-adapter-runtime.ts",
   },
   format: ["esm", "cjs"],
   dts: true,

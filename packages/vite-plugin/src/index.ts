@@ -23,4 +23,11 @@
  * @packageDocumentation
  */
 
-export { staxPlatform, type StaxPlatformOptions } from "./plugin.js";
+export {
+  nodeAdapter,
+  staxPlatform,
+  type NodeAdapterOptions,
+  type SsrEntryContext,
+  type StaxAdapter,
+  type StaxPlatformOptions,
+} from "./plugin.js";

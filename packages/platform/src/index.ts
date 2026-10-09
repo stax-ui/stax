@@ -1,3 +1,5 @@
+export type { AppOptions, SsrEntryContext, StaxAdapter } from "./adapter.js";
+
 export {
   Platform,
   RedirectError,
