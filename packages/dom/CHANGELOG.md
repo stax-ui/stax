@@ -1,5 +1,97 @@
 # Changelog
 
+## 0.10.0
+
+### Minor Changes
+
+- 19f02e6: fix(dom): `UniqueId` ids now line up between SSR and hydration (#173)
+
+  Before: `UniqueId.make` used a module-global counter. On the server it kept growing across requests in the same process (first SSR request → `panel-1`, tenth → `panel-23`); on the client the counter restarted from zero on each page load. So SSR'd ARIA references pointed at ids the client's hydration generated differently, silently breaking `aria-controls` / `aria-labelledby` / `aria-describedby` wiring, or triggering a hydration-mismatch warning on the `id` attribute.
+
+  Fix: add a per-render `IdGenerator` service (`Context.Tag`) and have `UniqueId.make` draw from it when it's in scope. The existing module-global counter stays as a fallback for callers that never pass through `mount` / `hydrate` / SSR (e.g. standalone tests, oddball embedding), so this is **not** a breaking change — SPA code that doesn't bother with the layer still gets sequential unique ids.
+
+  Entry points provide a fresh `IdGenerator` each:
+
+  - `mount(element, container, ...)` — one per app lifetime.
+  - `hydrate(element, container, ...)` — one per hydration call.
+  - `Platform.toHttpRoutes(router, ...)` — one per SSR request.
+  - `Platform.buildStaticSite(...)` — one per generated page.
+
+  Both server and client start from zero on the same tree, so ids match.
+
+  ## New public API
+
+  ```ts
+  import { IdGenerator, makeIdGeneratorLayer, UniqueId } from "@stax-ui/dom";
+
+  // Opt in manually (rare — entry points already do this):
+  yield * myProgram.pipe(Effect.provide(makeIdGeneratorLayer()));
+
+  // Access the service in a custom entry point:
+  const gen = yield * IdGenerator;
+  const id = yield * gen.next("widget");
+  ```
+
+  `UniqueId.make(prefix?)` keeps its existing signature; its behavior change is purely "use the service when one's available."
+
+  ## Tests
+
+  `UniqueId.test.ts` added. Covers:
+  - Counter restarts at 1 for a fresh `makeIdGeneratorLayer()`
+  - Two sequential renders with separate layers each start at 1 (SSR-isolation guarantee)
+  - Identical render orders produce identical id sequences (the SSR/hydrate contract)
+  - Fallback still produces unique ids when no layer is in scope (SPA backwards compat)
+  - `_reset` only affects the fallback counter, not scoped layers
+
+  Not part of this PR: an end-to-end integration test exercising `mount` + `hydrate` round-trip on a tree that uses `UniqueId.make` for ARIA relationships. The unit tests cover the mechanism; wiring is verified by inspection. Worth adding later with a Suspense-boundary variant, which is the one case most likely to desynchronize ids and should get special-case coverage.
+
+  Fixes #173.
+
+### Patch Changes
+
+- 866f03d: deprecate: `collect(...)` and `$.of(...)` are now marked `@deprecated`
+
+  Both are redundant now that element factories are variadic and accept
+  primitives / `Readable`s directly as children.
+
+  - `$.of(x)` → pass `x` directly. `$.p($.of("Hello"))` becomes `$.p("Hello")`;
+    `$.span($.of(nameReadable))` becomes `$.span(nameReadable)`. Strings,
+    numbers, and `Readable<string | number>` are all valid children.
+  - `collect(a, b, c)` → spread into the parent factory's variadic children.
+    `$.div({}, collect(a, b, c))` becomes `$.div({}, a, b, c)`. Error and
+    context types propagate through the variadic just as they did through
+    `collect`. Only use `collect` when you need a single `Effect<ChildNode[]>`
+    for a receiver that takes exactly one child (e.g., `provide(tag, value, ...)` —
+    its `children` slot is a single `Effect<A, E, R>`, not variadic).
+
+  Both remain fully functional at runtime — nothing is being removed here.
+  TypeScript surfaces the deprecation as an editor hint (strike-through in
+  VS Code, "'X' is deprecated" in the tooltip); it does not fail builds or
+  lint. No changes required in consumer code today.
+
+  Internal sweep in the same PR modernizes all examples (`examples/**`),
+  the package JSDoc `@example` blocks (`Provide`, `Animation/groups`,
+  `Control`), the DOM README, and test-file incidental usages. Tests that
+  specifically exercise the deprecated APIs' behavior are preserved as-is.
+
+- b7bdf32: fix(dom): `FocusTrap` marks siblings `inert` and inserts focus guards (#174)
+
+  `FocusTrap` already caught keyboard Tab navigation at the boundaries of its container and re-focused escapes via a `focusin` listener on `document`. That's enough to _mostly_ keep sighted keyboard users inside the container — but it's not enough for a proper modal:
+
+  - **Screen-reader virtual cursors could reach outside the trap.** NVDA, JAWS, and VoiceOver let the user navigate the DOM independently of focus (arrow through headings, landmarks, etc.). Nothing marked content outside the container as unreachable, so the "trap" was a lie for AT users.
+  - **The `focusin` fallback caught escape _after_ it happened.** A momentary flash of focus on the wrong element, programmatic focus moves to browser chrome, and click handlers that re-focused outside the container could all slip through.
+
+  Now `FocusTrap.make`:
+
+  1. Walks the container's ancestor chain up to `document.body` and sets `inert` on every sibling along the way. Siblings the caller had already marked inert are tracked separately so the finalizer only un-sets what the trap itself set. `inert` removes an element from the accessibility tree, blocks pointer events, prevents focus, and hides it from screen-reader virtual cursors — the browser's native "this is behind a modal" primitive.
+  2. Inserts invisible `[tabindex=0]` sentinel guards as the container's immediate siblings. When focus lands on the before-guard the trap redirects to the last focusable in the container; the after-guard redirects to the first. This catches Tab-out of the container before focus has actually left it, including Tab from browser chrome.
+
+  Guards are marked `aria-hidden="true"` and carry a `data-stax-focus-guard` attribute so the trap's own `getFocusableElements` scanner filters them out of the Tab-wrap list.
+
+  Everything is torn down in the scope finalizer: siblings un-inerted (only the ones we set), guards removed, listeners detached, previous focus restored.
+
+  Fixes #174.
+
 ## 0.9.2
 
 ### Patch Changes

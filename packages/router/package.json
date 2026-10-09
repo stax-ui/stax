@@ -1,6 +1,6 @@
 {
   "name": "@stax-ui/router",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "Router for Stax applications",
   "type": "module",
   "license": "MPL-2.0",

@@ -1,5 +1,19 @@
 # stax-template-ssr
 
+## 0.0.6
+
+### Patch Changes
+
+- Updated dependencies [866f03d]
+- Updated dependencies [b7bdf32]
+- Updated dependencies [ce22fff]
+- Updated dependencies [daaf84f]
+- Updated dependencies [c89eed1]
+- Updated dependencies [19f02e6]
+  - @stax-ui/dom@0.10.0
+  - @stax-ui/platform@0.6.0
+  - @stax-ui/router@0.5.3
+
 ## 0.0.5
 
 ### Patch Changes
