@@ -137,7 +137,7 @@ export type {
 export { virtualEach, VirtualListRef } from "./VirtualList/index.js";
 
 // Unique ID generation
-export { UniqueId } from "./UniqueId.js";
+export { IdGenerator, makeIdGeneratorLayer, UniqueId } from "./UniqueId.js";
 
 // Focus Trap
 export type { FocusTrapOptions } from "./FocusTrap/index.js";

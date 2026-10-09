@@ -29,6 +29,7 @@ import {
 } from "../../Control/HydrationControlCtx.js";
 import * as Element from "../../Element/index.js";
 import { HydrationSuspenseBoundaryCtx } from "../../SuspenseBoundaryCtx/HydrationSuspenseBoundaryCtx.js";
+import { makeIdGeneratorLayer } from "../../UniqueId.js";
 import { makeHydrationContext } from "./HydrationContext.js";
 import { createHydrationRenderer } from "./HydrationRenderer.js";
 
@@ -126,6 +127,12 @@ export function hydrate<
     let elementLayers = Layer.merge(hydrationContextLayer, ControlLayer);
     elementLayers = Layer.merge(elementLayers, suspenseLayer);
     elementLayers = Layer.merge(elementLayers, ClientAsyncCacheLayer);
+    // Per-hydration `IdGenerator` — counter restarts at zero every
+    // hydrate call, matching the per-SSR-request layer on the server
+    // so `UniqueId.make` ids line up across the boundary. Without
+    // this, SSR-generated ARIA references break after hydration
+    // (see #173).
+    elementLayers = Layer.merge(elementLayers, makeIdGeneratorLayer());
     if (opts.layers) {
       elementLayers = Layer.merge(
         elementLayers,
