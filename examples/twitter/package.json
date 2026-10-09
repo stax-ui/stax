@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build"
+    "serve": "node dist/server/index.js"
   },
   "dependencies": {
     "@effect/platform": "^0.94.0",
