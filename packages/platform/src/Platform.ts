@@ -37,6 +37,7 @@ import {
   AsyncCache,
   Element,
   makeAsyncCache,
+  makeIdGeneratorLayer,
   RendererContext,
   type ControlCtx,
   type SuspenseBoundaryCtx,
@@ -434,6 +435,12 @@ export const toHttpRoutes = <
       // SSR AsyncCache — entries are scoped to this request
       const asyncCacheLayer = Layer.succeed(AsyncCache, makeAsyncCache());
 
+      // Per-request `IdGenerator` — counter starts at zero for every
+      // SSR render so `UniqueId.make`'s output is deterministic across
+      // requests AND matches the counter the client's `hydrate` builds
+      // (also starts at zero). See #173.
+      const idGeneratorLayer = makeIdGeneratorLayer();
+
       // Render to string
       let html: string;
 
@@ -443,7 +450,12 @@ export const toHttpRoutes = <
         // pre-computed data — no double-loading.
         html = yield* render(options.app()).pipe(
           Effect.provide(
-            Layer.mergeAll(navLayer, routeDataProviderLayer, asyncCacheLayer),
+            Layer.mergeAll(
+              navLayer,
+              routeDataProviderLayer,
+              asyncCacheLayer,
+              idGeneratorLayer,
+            ),
           ),
         );
       } else {
@@ -463,7 +475,12 @@ export const toHttpRoutes = <
 
         html = yield* render(withLayouts).pipe(
           Effect.provide(
-            Layer.mergeAll(navLayer, routeDataProviderLayer, asyncCacheLayer),
+            Layer.mergeAll(
+              navLayer,
+              routeDataProviderLayer,
+              asyncCacheLayer,
+              idGeneratorLayer,
+            ),
           ),
         );
       }
@@ -905,10 +922,16 @@ export const buildStaticSite = (
           // AsyncCache for SSR
           const asyncCacheLayer = Layer.succeed(AsyncCache, makeAsyncCache());
 
+          // Per-page `IdGenerator` — counter restarts for each generated
+          // page so SSG output is deterministic and matches the client's
+          // `hydrate` which also starts at zero (#173).
+          const idGeneratorLayer = makeIdGeneratorLayer();
+
           const ssrLayers = Layer.mergeAll(
             navLayer,
             routeDataProviderLayer,
             asyncCacheLayer,
+            idGeneratorLayer,
           );
 
           // Render to HTML
@@ -955,10 +978,12 @@ export const buildStaticSite = (
           Effect.succeed({ data: undefined, loaderPath: "/404", actions: {} }),
       });
       const asyncCacheLayer = Layer.succeed(AsyncCache, makeAsyncCache());
+      const idGeneratorLayer = makeIdGeneratorLayer();
       const ssrLayers = Layer.mergeAll(
         navLayer,
         routeDataProviderLayer,
         asyncCacheLayer,
+        idGeneratorLayer,
       );
 
       let fallbackHtml: string;

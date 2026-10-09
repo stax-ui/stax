@@ -39,6 +39,7 @@ import { ClientAsyncCacheLayer } from "../../ClientAsyncCache.js";
 import { ClientControlCtx } from "../../Control/ClientControlCtx.js";
 import * as Element from "../../Element/index.js";
 import { ClientSuspenseBoundaryCtx } from "../../SuspenseBoundaryCtx/ClientSuspenseBoundaryCtx.js";
+import { makeIdGeneratorLayer } from "../../UniqueId.js";
 import { DOMRenderer } from "../DOMRenderer.js";
 
 /**
@@ -76,6 +77,10 @@ export const _mountScoped = (
       Effect.provide(ClientControlCtx),
       Effect.provide(suspenseLayer),
       Effect.provide(ClientAsyncCacheLayer),
+      // Per-app `IdGenerator` so `UniqueId.make` ids restart at zero
+      // for each `mount` call. In an SPA this is per page-load; in an
+      // SSR app the matching reset happens inside `hydrate`.
+      Effect.provide(makeIdGeneratorLayer()),
     );
     container.appendChild(el);
 
