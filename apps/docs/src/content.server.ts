@@ -127,22 +127,12 @@ const parseFrontmatter = (
 
 // ─── Content directory discovery ─────────────────────────────────────────────
 
-const CONTENT_DIR = path.resolve(
-  import.meta.dirname ?? path.dirname(new URL(import.meta.url).pathname),
-  "..",
-  "content",
-);
-
-// At SSG time this file executes from `apps/docs/dist/entry.js`, so
-// walk out to the project root and back down into `src/components/` —
-// the same directory tree `apps/docs/content/` lives at, only for
-// TypeScript source rather than markdown.
-const COMPONENTS_DIR = path.resolve(
-  import.meta.dirname ?? path.dirname(new URL(import.meta.url).pathname),
-  "..",
-  "src",
-  "components",
-);
+// Resolve from the project root (where `pnpm build` runs). Avoids
+// having to know how deep the executed bundle lives relative to the
+// source — works whether SSG writes its entry to `dist/entry.js` (old
+// shape) or `dist/server/index.js` (adapter shape).
+const CONTENT_DIR = path.resolve(process.cwd(), "content");
+const COMPONENTS_DIR = path.resolve(process.cwd(), "src", "components");
 
 /**
  * Load real source files from a subdirectory of `apps/docs/src/components/`,

@@ -9,6 +9,10 @@ export {
   nodeAdapter,
   type NodeAdapterOptions,
 } from "@stax-ui/platform/node-adapter";
+export {
+  ssgAdapter,
+  type SsgAdapterOptions,
+} from "@stax-ui/platform/ssg-adapter";
 export type {
   StaxAdapter,
   SsrEntryContext,
@@ -216,17 +220,26 @@ export const staxPlatform = (options: StaxPlatformOptions = {}): Plugin => {
       }
 
       // Client build. In the new shape, the user's `client` entry is the
-      // Rollup input, and the client bundle lives under `dist/client/` so
-      // the Node adapter can serve it from a known subdirectory.
+      // Rollup input. The adapter contributes build-time preferences —
+      // `nodeAdapter` wants a stable `client.js` at `dist/client/`;
+      // `ssgAdapter` wants hashed assets at `dist/` + a manifest.
       if (newShape && !config.build?.ssr) {
+        const cbo = options.adapter!.clientBuildOptions ?? {};
+        const clientOutDir = cbo.outDir ?? "dist/client";
+        // Only override Vite's default entryFileNames when the adapter
+        // asks for a stable name (e.g. Node). SSG leaves it unset so
+        // Vite emits hashed `assets/[name]-[hash].js` and writes them
+        // into the manifest the SSG runtime reads.
+        const output = cbo.entryFileNames
+          ? { entryFileNames: cbo.entryFileNames }
+          : undefined;
         return {
           build: {
-            outDir: "dist/client",
+            outDir: clientOutDir,
+            manifest: cbo.manifest ?? false,
             rollupOptions: {
               input: options.client!,
-              output: {
-                entryFileNames: "client.js",
-              },
+              ...(output && { output }),
             },
           },
         };
@@ -269,16 +282,21 @@ export const staxPlatform = (options: StaxPlatformOptions = {}): Plugin => {
     load(id) {
       if (!newShape) return;
       if (id !== RESOLVED_SSR_ENTRY_ID) return;
-      // The adapter synthesizes the entire module as a string. The user's
-      // app module path becomes the `appModuleId` so the generated code
-      // imports from the right file.
+      // Compute the relative path from the server bundle's dir
+      // (always `<root>/dist/server/`) to the adapter's chosen client
+      // outDir. Node: `dist/client` → `../client`. SSG: `dist` → `..`.
+      const clientOutDir =
+        options.adapter!.clientBuildOptions?.outDir ?? "dist/client";
+      const clientRelativeDir = path.relative(
+        path.resolve(root, "dist/server"),
+        path.resolve(root, clientOutDir),
+      );
+
       return options.adapter!.ssrEntryModule({
         appModuleId: appPath!,
         scripts: [],
         styles: [],
-        // Client bundle lives at `dist/client/`, generated entry at
-        // `dist/server/index.js`, so relative path is `../client`.
-        clientRelativeDir: "../client",
+        clientRelativeDir: clientRelativeDir.replace(/\\/g, "/"),
       });
     },
 
@@ -557,10 +575,32 @@ export const staxPlatform = (options: StaxPlatformOptions = {}): Plugin => {
     },
 
     // -------------------------------------------------------------------------
-    // SSG build (production only, when mode is "ssg")
+    // Post-build hook — new shape uses `adapter.afterSsrBuild`; legacy
+    // falls through to the SSG `closeBundle` path below.
     // -------------------------------------------------------------------------
 
     async closeBundle() {
+      // New shape: delegate to the adapter's post-SSR hook. For
+      // `nodeAdapter` this is undefined (nothing to run at build time).
+      // For `ssgAdapter`, it imports the emitted entry so its top-level
+      // `await runSsgBuild(...)` executes.
+      if (newShape && isSsr && !isDev && options.adapter?.afterSsrBuild) {
+        const serverOutDir = path.resolve(root, outDir);
+        const ssrEntryPath = path.resolve(serverOutDir, "index.js");
+        const clientOutDir = path.resolve(
+          root,
+          options.adapter.clientBuildOptions?.outDir ?? "dist/client",
+        );
+        await options.adapter.afterSsrBuild({
+          ssrEntryPath,
+          projectRoot: root,
+          clientOutDir,
+          serverOutDir,
+        });
+        return;
+      }
+
+      // Legacy SSG path.
       if (mode !== "ssg" || !entryPath || !isSsr || isDev) return;
 
       try {
