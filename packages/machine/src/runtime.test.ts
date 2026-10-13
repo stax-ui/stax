@@ -166,13 +166,46 @@ describe("Machine runtime — Service", () => {
       }),
     ));
 
-  it("global `on` handlers fire in any state — wait, first-pass runtime doesn't wire global on, skipping", () => {
-    // NOTE: global `on:` is on the deferred-work list for the first
-    // pass. Once wired, this test would use RESET (declared in `on`)
-    // to reset counter from either state. Leaving as an explicit
-    // placeholder so we notice when the wiring lands.
-    expect(true).toBe(true);
-  });
+  it("global `on` handlers fire in any state and transition correctly", () =>
+    withCounter((counter) =>
+      Effect.gen(function* () {
+        // Counter's spec has `on: { RESET: ... }` — a global that
+        // resets count and transitions to idle. The per-state maps
+        // for `idle` and `frozen` have no RESET.
+        yield* counter.dispatch("INC");
+        yield* counter.dispatch("INC");
+        yield* counter.dispatch("INC");
+        yield* counter.dispatch("FREEZE");
+        expect(counter.state()).toBe("frozen");
+        expect(counter.snapshot().count).toBe(3);
+
+        // RESET from frozen — only global handles it.
+        yield* counter.dispatch("RESET");
+        expect(counter.state()).toBe("idle");
+        expect(counter.snapshot().count).toBe(0);
+      }),
+    ));
+
+  it("canDispatch reports true for events handled only by the global `on` map", () =>
+    withCounter((counter) =>
+      Effect.gen(function* () {
+        // In frozen, no local RESET — but global handles it.
+        yield* counter.dispatch("FREEZE");
+        expect(counter.canDispatch("RESET")).toBe(true);
+      }),
+    ));
+
+  it("dispatchOrFail succeeds when only the global `on` map handles the event", () =>
+    withCounter((counter) =>
+      Effect.gen(function* () {
+        yield* counter.dispatch("FREEZE");
+        // Pre-change this would fail (no local handler for RESET in
+        // frozen). Now the global handles it, so dispatchOrFail
+        // settles the transition cleanly.
+        yield* counter.dispatchOrFail("RESET");
+        expect(counter.state()).toBe("idle");
+      }),
+    ));
 
   it("subscribe fires on output changes and unsubscribe stops it", () =>
     withCounter((counter) =>
@@ -948,7 +981,143 @@ describe("Machine runtime — Effect-flavored subscribes", () => {
         yield* counter.dispatch("UNFREEZE");
         yield* Effect.yieldNow();
         yield* Effect.yieldNow();
-        expect(seen).toEqual([["UNFREEZE"], ["DEC", "FREEZE", "INC"]]);
+        // Counter's spec also has a global `on.RESET` — it shows up
+        // in every state's available-events set.
+        expect(seen).toEqual([
+          ["RESET", "UNFREEZE"],
+          ["DEC", "FREEZE", "INC", "RESET"],
+        ]);
       }),
     ));
+});
+
+// -----------------------------------------------------------------------------
+// Global `on:` edge cases — precedence against a per-state handler
+// for the same event, and firing during a `transitionAwait`-held
+// state. The Counter machine can't exercise either (no event
+// collisions, no condition-waits), so build dedicated specs.
+// -----------------------------------------------------------------------------
+
+describe("Machine runtime — global `on:` edge cases", () => {
+  it("per-state handler wins over the spec-level `on:` handler for the same event", () => {
+    // Both layers have a BUMP handler. The per-state one adds 10 to
+    // ctx.count; the global one adds 1. The per-state handler is
+    // the one that should run while in `idle`.
+    interface PrecedenceStates {
+      idle: {};
+    }
+    interface PrecedenceEvents {
+      BUMP: {};
+    }
+    interface PrecedenceContext {
+      count: number;
+    }
+    interface PrecedenceOutput {
+      count: number;
+    }
+    class Precedence extends Machine.Service<
+      Precedence,
+      PrecedenceStates,
+      PrecedenceEvents,
+      PrecedenceContext,
+      PrecedenceOutput,
+      never
+    >()("Precedence") {}
+
+    const layer = Machine.serviceLayer(
+      Precedence,
+      Effect.succeed({
+        initial: "idle" as const,
+        context: { count: 0 },
+        output: (ctx: PrecedenceContext) => ({ count: ctx.count }),
+        on: {
+          BUMP: (self) =>
+            self.assign((ctx: PrecedenceContext) => ({ count: ctx.count + 1 })),
+        },
+        states: {
+          idle: (self) =>
+            Effect.succeed({
+              BUMP: () =>
+                self.assign((ctx: PrecedenceContext) => ({
+                  count: ctx.count + 10,
+                })),
+            }),
+        },
+      }),
+    );
+
+    return runScoped(
+      Effect.gen(function* () {
+        const machine = yield* Precedence;
+        yield* machine.dispatch("BUMP");
+        // Per-state handler ran (+10), not the global (+1).
+        expect(machine.snapshot().count).toBe(10);
+      }).pipe(Effect.provide(layer)),
+    );
+  });
+
+  it("global `on:` handler fires during a `transitionAwait`-held state and transitions out cleanly", () => {
+    // A machine in `waiting` is holding on a transitionAwait for
+    // a `GO` register. Separately, the spec has a global
+    // `on.CANCEL` that transitions to `cancelled`. Dispatching
+    // CANCEL mid-wait should fire the global, close the pending
+    // state scope (firing `transitionAwait`'s unsubscribe), and
+    // land in `cancelled` — all without the `go` ever firing.
+    interface GuardedStates {
+      waiting: {};
+      done: {};
+      cancelled: {};
+    }
+    interface GuardedEvents {
+      CANCEL: {};
+    }
+    class Guarded extends Machine.Service<
+      Guarded,
+      GuardedStates,
+      GuardedEvents,
+      {},
+      {},
+      never
+    >()("Guarded") {}
+
+    let unsubscribeFires = 0;
+    const layer = Machine.serviceLayer(
+      Guarded,
+      Effect.succeed({
+        initial: "waiting" as const,
+        context: {},
+        output: () => ({}),
+        on: {
+          CANCEL: (self) => Effect.succeed(self.transition("cancelled")),
+        },
+        states: {
+          waiting: (self) =>
+            // Never-firing register — go is captured but we never
+            // call it. CANCEL has to be the only path out.
+            self.transitionAwait(() => {
+              return () => {
+                unsubscribeFires++;
+              };
+            }, "done"),
+          done: () => Effect.succeed(undefined),
+          cancelled: () => Effect.succeed(undefined),
+        },
+      }),
+    );
+
+    return runScoped(
+      Effect.gen(function* () {
+        const machine = yield* Guarded;
+        expect(machine.state()).toBe("waiting");
+        expect(unsubscribeFires).toBe(0);
+
+        yield* machine.dispatch("CANCEL");
+        yield* Effect.yieldNow();
+
+        expect(machine.state()).toBe("cancelled");
+        // State scope closed → register's unsubscribe ran.
+        expect(unsubscribeFires).toBe(1);
+      }).pipe(Effect.provide(layer)),
+    );
+  });
 });

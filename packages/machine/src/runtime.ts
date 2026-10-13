@@ -1,29 +1,29 @@
 /**
  * State machine runtime.
  *
- * Scope of this file (first-pass runtime):
- * - Context store with `self.assign` (per-handler batching)
- * - Event queue with per-machine mutex — one handler at a time, FIFO
+ * Invariants:
+ * - Context store with `self.assign` — assigns within a single
+ *   handler batch into one subscriber notification; assigns from
+ *   outside a handler (e.g. a mirror subscription callback) notify
+ *   immediately.
+ * - Event queue with per-machine mutex — one handler at a time,
+ *   FIFO. Events dispatched mid-handler queue and drain after.
  * - State scope machinery — each state gets its own CloseableScope
  *   that closes on transition, firing any `addFinalizer`s and
- *   canceling any `forkScoped` fibers registered inside the state fn
- * - Output projection — pure fn of context, recomputed on any assign,
- *   subscribers notified when the projected value differs by reference
+ *   canceling any `forkScoped` fibers registered inside the state fn.
+ * - Output projection — pure fn of context, recomputed on any
+ *   assign, subscribers notified when the projected value differs
+ *   by reference (shallow equal on top-level fields).
  * - Handler installation timing — state fn's Effect runs first,
- *   handlers install on return; events dispatched during the state
- *   fn queue and drain after
+ *   handlers install on return.
  * - Transition value interpretation — `self.transition(...)`'s
- *   returned value drives the next state entry; reentrant transitions
- *   are supported with a depth cap
- * - Basic MachineHandle: `snapshot`, `output`, `state`, `inState`,
- *   `subscribe`, `subscribeTo`, `subscribeState`, `subscribeInState`,
- *   `dispatch`, `dispatchOrFail`
- *
- * Not yet:
- * - Global `on:` handler map (spec-level fallback handlers) — the
- *   spec accepts it but the runtime doesn't consult it when draining
- *   events. Separate design question (precedence vs. per-state
- *   handlers, interaction with `dispatchOrFail`).
+ *   returned value drives the next state entry; reentrant
+ *   transitions are supported up to `REENTRY_DEPTH_CAP`, past which
+ *   `TransitionLimit` fires.
+ * - Event dispatch precedence — per-state handler map first, then
+ *   spec-level `on:` map. Globals fire even in condition-wait or
+ *   task states (no local handler map); if a global returns a
+ *   transition it closes the pending state scope cleanly.
  */
 
 import { Effect, Exit, Predicate, Record, Runtime, Scope } from "effect";
@@ -470,7 +470,12 @@ const enqueue = <States, Events, Context, Output>(
 ): Effect.Effect<void, UnhandledEvent | MalformedSpec | TransitionLimit> =>
   Effect.gen(function* () {
     if (mode === "fail") {
-      if (!runtime.handlers || !Record.has(runtime.handlers, event as never)) {
+      const localHas =
+        runtime.handlers && Record.has(runtime.handlers, event as never);
+      const globalHas =
+        runtime.spec.on &&
+        Record.has(runtime.spec.on as Record<string, unknown>, event);
+      if (!localHas && !globalHas) {
         return yield* new UnhandledEvent({
           event,
           state: runtime.currentState,
@@ -485,14 +490,69 @@ const enqueue = <States, Events, Context, Output>(
   });
 
 /**
+ * Resolve an event to its handler Effect, preferring the current
+ * state's handler map over the spec-level `on:` map. Returns
+ * undefined when neither layer handles the event.
+ *
+ * Per-state handlers close over the state fn's `self` and take just
+ * `(payload)`. Global handlers run outside any state fn and have no
+ * such closure, so they take `(self, payload)` from the spec — we
+ * normalize by invoking the global one with `runtime.self` and
+ * returning a Pre-closed `(payload) => Effect<unknown>` so the drain
+ * loop treats both uniformly.
+ */
+const resolveHandler = <States, Events, Context, Output>(
+  runtime: Runtime<States, Events, Context, Output>,
+  event: string,
+): ((payload: unknown) => Effect.Effect<unknown>) | undefined => {
+  const local = runtime.handlers?.[event as keyof Events] as
+    ((payload: unknown) => Effect.Effect<unknown>) | undefined;
+  if (local) return local;
+
+  const global = runtime.spec.on?.[event as keyof Events] as
+    | ((
+        self: MachineSelf<States, Events, Context>,
+        payload: unknown,
+      ) => Effect.Effect<unknown>)
+    | undefined;
+  if (global) {
+    return (payload: unknown) => global(runtime.self, payload);
+  }
+  return undefined;
+};
+
+/**
+ * Does the runtime have any handler-matchable surface? True if the
+ * current state installed a handler map, or if the spec has a
+ * non-empty global `on:` map. Used to decide whether `drainQueue`
+ * should loop or hold events — a state in condition-wait
+ * (`transitionAwait`, task state) has `runtime.handlers === null`,
+ * but if the spec has globals those can still fire against the
+ * queue.
+ */
+const hasAnyHandlers = <States, Events, Context, Output>(
+  runtime: Runtime<States, Events, Context, Output>,
+): boolean => {
+  if (runtime.handlers) return true;
+  const on = runtime.spec.on as Record<string, unknown> | undefined;
+  if (on && Object.keys(on).length > 0) return true;
+  return false;
+};
+
+/**
  * Drain the event queue serially. One handler at a time; assigns
  * within a handler batch into a single output notification when the
  * handler resolves.
  *
- * If handlers aren't installed (state is entering, or state is a
- * task/no-op with no handler map), the queue holds events — they'll
- * drain when the next handler-installing state entry completes.
- * Bail out immediately in that case rather than dropping events.
+ * Lookup order per event: current state's handler map first, then
+ * the spec-level `on:` map. Only when neither matches is the event
+ * silently dropped (dispatchOrFail checks the same OR at enqueue
+ * time, so strict callers still get `UnhandledEvent`).
+ *
+ * If no handler surface is installed at all (`runtime.handlers`
+ * null AND no spec-level `on:`), events stay queued — they'll drain
+ * on the next state entry that installs handlers, or never, if the
+ * machine stays in that state forever.
  */
 const drainQueue = <States, Events, Context, Output>(
   runtime: Runtime<States, Events, Context, Output>,
@@ -503,18 +563,18 @@ const drainQueue = <States, Events, Context, Output>(
     runtime.isProcessing = true;
 
     return Effect.gen(function* () {
-      while (runtime.eventQueue.length > 0 && runtime.handlers) {
+      while (runtime.eventQueue.length > 0 && hasAnyHandlers(runtime)) {
         const next = runtime.eventQueue.shift();
 
         if (!next) break;
 
-        const handler = runtime.handlers?.[next.event as keyof Events] as
-          ((payload: unknown) => Effect.Effect<unknown>) | undefined;
+        const handler = resolveHandler(runtime, next.event);
 
         if (!handler) {
-          // Current state has no handler for this specific event —
-          // drop it (silent dispatch semantics; strict callers used
-          // dispatchOrFail which checked at enqueue time).
+          // Neither the current state's handler map nor the
+          // spec-level `on:` map has this event — drop it (silent
+          // dispatch semantics; strict callers used dispatchOrFail
+          // which checked both layers at enqueue time).
           continue;
         }
 
@@ -647,14 +707,51 @@ const notifyState = <States, Events, Context, Output>(
  * subscribers when the handler map changes (i.e., after a transition
  * settles). Called from `enterStateRec` once handlers are installed.
  */
+/**
+ * Snapshot of what events are handleable right now — the union of
+ * the current state's handler map keys and the spec-level `on:`
+ * map keys. Shared by `canDispatch`, `availableEvents`, and
+ * `notifyHandlersChanged` so consumers see consistent semantics.
+ *
+ * De-duplicated by Set, so an event handled by both layers appears
+ * once. Order isn't guaranteed — callers should treat the result
+ * as a set.
+ */
+const computeHandleableEvents = <States, Events, Context, Output>(
+  runtime: Runtime<States, Events, Context, Output>,
+): ReadonlyArray<string> => {
+  const seen = new Set<string>();
+  if (runtime.handlers) {
+    for (const key of Object.keys(runtime.handlers)) seen.add(key);
+  }
+  const on = runtime.spec.on as Record<string, unknown> | undefined;
+  if (on) {
+    for (const key of Object.keys(on)) seen.add(key);
+  }
+  return Array.from(seen);
+};
+
+const canDispatchEvent = <States, Events, Context, Output>(
+  runtime: Runtime<States, Events, Context, Output>,
+  event: string,
+): boolean => {
+  if (
+    runtime.handlers &&
+    (runtime.handlers as Record<string, unknown>)[event] != null
+  ) {
+    return true;
+  }
+  const on = runtime.spec.on as Record<string, unknown> | undefined;
+  return on?.[event] != null;
+};
+
 const notifyHandlersChanged = <States, Events, Context, Output>(
   runtime: Runtime<States, Events, Context, Output>,
 ): void => {
-  const handlers = runtime.handlers as Record<string, unknown> | null;
-
-  // canDispatch subscribers — fire per-event.
+  // canDispatch subscribers — fire per-event. OR across local
+  // state handlers and spec-level `on:`.
   for (const [event, subs] of runtime.subCanDispatch) {
-    const canNow = handlers?.[event] != null;
+    const canNow = canDispatchEvent(runtime, event);
 
     for (const sub of subs) {
       try {
@@ -667,9 +764,7 @@ const notifyHandlersChanged = <States, Events, Context, Output>(
 
   // availableEvents subscribers — fire once with the current list.
   if (runtime.subAvailableEvents.size > 0) {
-    const events = handlers
-      ? (Object.keys(handlers) as ReadonlyArray<string>)
-      : ([] as ReadonlyArray<string>);
+    const events = computeHandleableEvents(runtime);
 
     for (const sub of runtime.subAvailableEvents) {
       try {
@@ -719,11 +814,9 @@ const buildHandle = <States, Events, Context, Output>(
     snapshot: () => runtime.currentOutput,
     state: () => runtime.currentState,
     inState: (name: string) => runtime.currentState === name,
-    canDispatch: (event: string) => runtime.handlers?.[event as never] != null,
+    canDispatch: (event: string) => canDispatchEvent(runtime, event),
     availableEvents: () =>
-      runtime.handlers
-        ? (Object.keys(runtime.handlers) as unknown as ReadonlyArray<never>)
-        : ([] as ReadonlyArray<never>),
+      computeHandleableEvents(runtime) as unknown as ReadonlyArray<never>,
 
     get output() {
       return runtime.currentOutput;

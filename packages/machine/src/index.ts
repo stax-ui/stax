@@ -232,10 +232,6 @@
  * );
  * ```
  *
- * ---
- *
- * ## Not yet
- * - Global `on:` handler map (spec-level fallback handlers)
  */
 
 import { Context, Effect, Layer, type Scope } from "effect";

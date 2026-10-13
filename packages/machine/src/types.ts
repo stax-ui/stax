@@ -305,6 +305,25 @@ export interface Spec<
   readonly initial: keyof States & string;
   readonly context: Context;
   readonly output: (ctx: Context) => Output;
+  /**
+   * Spec-level fallback handlers that fire in any state. Precedence
+   * is per-state wins: when a dispatched event has both a handler on
+   * the current state's handler map AND a handler here, the per-state
+   * one runs and this one is ignored for that dispatch.
+   *
+   * Handlers receive `(self, payload)` — the state-fn's closure
+   * isn't available at spec level, so `self` is passed explicitly.
+   *
+   * Fires even while the machine is in a `transitionAwait`-held
+   * state or a task state with no local handler map, since the whole
+   * point of a global handler is "respond regardless of state." If a
+   * global handler returns a transition during such a hold, the
+   * state scope closes (firing `transitionAwait`'s unsubscribe) and
+   * the machine transitions as directed. `canDispatch`,
+   * `availableEvents`, and their `subscribe*` siblings reflect the
+   * union of per-state + global handleable events, so UI can wire
+   * against the real "will this be handled?" surface.
+   */
   readonly on?: {
     [K in keyof Events]?: (
       self: MachineSelf<States, Events, Context>,
