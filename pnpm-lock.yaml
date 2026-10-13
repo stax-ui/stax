@@ -380,6 +380,9 @@ importers:
 
   packages/machine:
     dependencies:
+      '@stax-ui/core':
+        specifier: workspace:*
+        version: link:../core
       effect:
         specifier: 3.19.19
         version: 3.19.19

@@ -29,6 +29,11 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
+    },
+    "./stax": {
+      "types": "./dist/stax.d.ts",
+      "import": "./dist/stax.js",
+      "require": "./dist/stax.cjs"
     }
   },
   "files": [
@@ -38,6 +43,9 @@
   "sideEffects": false,
   "scripts": {
     "build": "tsup"
+  },
+  "dependencies": {
+    "@stax-ui/core": "workspace:^"
   },
   "peerDependencies": {
     "effect": "^3.0.0"

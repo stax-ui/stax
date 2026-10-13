@@ -10,6 +10,15 @@ Framework-neutral state machines for Effect. Declarative reducers with typed eve
 pnpm add @stax-ui/machine effect
 ```
 
+## Subpath exports
+
+| Import path | Purpose |
+|---|---|
+| `@stax-ui/machine` | The runtime: `Machine.Service`, `Machine.Factory`, their Layer constructors, `MachineHandle` / `MachineSelf` types. Framework-neutral — no UI dependency. |
+| `@stax-ui/machine/stax` | Readable adapters for Stax: turns a `MachineHandle`'s snapshot + subscribe surface into `@stax-ui/core` Readables so Stax components can bind to the machine declaratively. Pulls in `@stax-ui/core`. |
+
+Peer adapters for other UI libraries (React, Vue, Solid, …) can land under `@stax-ui/machine/<framework>` the same way. The core runtime is UI-neutral; the adapters just translate the subscription primitives into whatever reactive shape the target library uses.
+
 ## Why
 
 State machines are reducers with a shape. Where a bare reducer lets any event mutate any field, a machine says "in this state, these events apply; everything else is noise." That constraint is what makes them debuggable at scale — the handler surface is finite and inspectable per state, so "why did my app get into this weird state" is a lookup, not an archaeology dig.
@@ -316,6 +325,42 @@ yield* session.awaitState("signedIn");
 ```
 
 Short-circuits if the machine is already in that state when `awaitState` is called.
+
+### Stax Readable adapters (`@stax-ui/machine/stax`)
+
+For Stax components, you usually want a `Readable` so you can bind a value into the DOM declaratively via `$.div({ class: readable.map(...) })`, `when(readable, { … })`, etc. The `stax` subpath wraps the handle's subscription methods and returns `Readable`s directly:
+
+```ts
+import { MachineReadable } from "@stax-ui/machine/stax";
+
+const UserGreeting = () =>
+  Effect.gen(function* () {
+    const session = yield* SessionMachine;
+    const user = MachineReadable.field(session, "user");
+    const isAuthed = MachineReadable.inState(session, "signedIn");
+
+    return $.div(
+      { class: isAuthed.map((v) => (v ? "signed-in" : "signed-out")) },
+      when(isAuthed, {
+        true: () => $.p({}, "Hello, ", user.map((u) => u?.name ?? "")),
+        false: () => $.p({}, "Please sign in."),
+      }),
+    );
+  });
+```
+
+One factory per subscription surface:
+
+| Factory | Readable |
+|---|---|
+| `MachineReadable.output(handle)` | `Readable<Output>` |
+| `MachineReadable.field(handle, key)` | `Readable<Output[K]>` |
+| `MachineReadable.state(handle)` | `Readable<keyof States>` |
+| `MachineReadable.inState(handle, name)` | `Readable<boolean>` |
+| `MachineReadable.canDispatch(handle, event)` | `Readable<boolean>` |
+| `MachineReadable.availableEvents(handle)` | `Readable<ReadonlyArray<keyof Events>>` |
+
+`inState` and `canDispatch` are deduped — a transition that doesn't flip the predicate doesn't emit. The others rely on the runtime's existing dedup (output + field use shallow-equal / `Object.is`; `state` only fires on real transitions).
 
 ### Effect-flavored subscribers
 
