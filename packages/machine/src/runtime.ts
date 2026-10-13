@@ -20,22 +20,17 @@
  *   `dispatch`, `dispatchOrFail`
  *
  * Not yet:
- * - `self.transitionAwait` — needs register/go/scope lifecycle wiring
- * - `awaitState` — needs Deferred wiring keyed per state name
- * - `subscribeEffect` / `subscribeToEffect` / etc. — Effect-flavored
- *   siblings of the callback subscribers
- * - `canDispatch` + `subscribeCanDispatch` — reactive predicate for UI
- * - `availableEvents` + `subscribeAvailableEvents`
- * - `self.onExit` sugar (Effect.addFinalizer works today)
- * - Machine.Factory + Machine.factoryLayer + `.spawn(args)`
- * - Global `on:` handler map (spec-level fallback handlers)
+ * - Global `on:` handler map (spec-level fallback handlers) — the
+ *   spec accepts it but the runtime doesn't consult it when draining
+ *   events. Separate design question (precedence vs. per-state
+ *   handlers, interaction with `dispatchOrFail`).
  */
 
-import { Effect, Exit, Predicate, Record, Scope } from "effect";
+import { Effect, Exit, Predicate, Record, Runtime, Scope } from "effect";
 
 import {
   MalformedSpec,
-  NotImplemented,
+  TransitionAwaitTypeId,
   TransitionLimit,
   TransitionTypeId,
   UnhandledEvent,
@@ -54,6 +49,16 @@ import {
 /** Duck-type check for a Transition value returned from a state fn / handler. */
 const isTransition = (value: unknown): value is Transition =>
   Predicate.hasProperty(value, TransitionTypeId);
+
+/**
+ * Duck-type check for the pending-async-wait sentinel from
+ * `self.transitionAwait`. These are regular Transitions decorated
+ * with an internal marker so `enterStateRec` can recognize them and
+ * hold the state (no handlers, no chaining) until the register's
+ * `go` fires.
+ */
+const isTransitionAwait = (value: Transition): boolean =>
+  Predicate.hasProperty(value, TransitionAwaitTypeId);
 
 /** Reference-equality shallow-object equality for output projection. */
 const shallowEqual = (a: unknown, b: unknown): boolean => {
@@ -276,10 +281,53 @@ const instantiateMachine = <States, Events, Context, Output>(
           payload: args[0] ?? {},
         }) as Transition,
       transitionAwait: (
-        _register: (go: () => void) => () => void,
-        _name: string,
-        ..._args: [] | [unknown]
-      ) => Effect.fail(new NotImplemented({ feature: "self.transitionAwait" })),
+        register: (go: () => void) => () => void,
+        name: string,
+        ...args: [] | [unknown]
+      ) =>
+        // Sync setup — no Effect-level suspension. The state fn
+        // continues to return value synchronously; the returned
+        // Transition carries the TransitionAwaitTypeId sentinel so
+        // enterStateRec knows to hold the state rather than chain
+        // to `name` immediately. The actual transition happens
+        // later, when the register's `go` fires and triggers
+        // enterStateRec externally.
+        Effect.gen(function* () {
+          const payload = args[0] ?? {};
+          let fired = false;
+          const unsubscribe = register(() => {
+            if (fired) return;
+            fired = true;
+            // Fire-and-forget: entering the next state (which
+            // starts by closing the current state scope) can't
+            // happen on the Effect that invoked `go` — that's an
+            // external callback with no fiber of its own. Run the
+            // transition on a fresh fiber. MalformedSpec /
+            // TransitionLimit from an external trigger are
+            // genuinely unrecoverable at this entry point, so
+            // orDie them — subscribers see the transition settle
+            // (or not) via subscribeState etc.
+            Effect.runFork(
+              enterStateRec(runtime, name, payload, 0, [
+                runtime.currentState,
+              ]).pipe(Effect.orDie),
+            );
+          });
+          // Register unsubscribe on the state scope — if the
+          // machine leaves this state via another path (e.g.,
+          // another transitionAwait or a sibling event handler
+          // fires first), the listener cleanup still runs.
+          const stateScope = runtime.stateScope;
+          if (stateScope) {
+            yield* Scope.addFinalizer(stateScope, Effect.sync(unsubscribe));
+          }
+          return {
+            [TransitionTypeId]: TransitionTypeId,
+            [TransitionAwaitTypeId]: TransitionAwaitTypeId,
+            target: name,
+            payload,
+          } as unknown as Transition;
+        }),
       onExit: (effect: Effect.Effect<void>) =>
         Effect.addFinalizer(() => effect),
     } as unknown as MachineSelf<States, Events, Context>;
@@ -369,6 +417,17 @@ const enterStateRec = <States, Events, Context, Output>(
 
     // Interpret the return value.
     if (isTransition(result)) {
+      if (isTransitionAwait(result)) {
+        // Pending async wait — the state fn's transitionAwait set
+        // up a register listener and returned a sentinel. Hold the
+        // state here: no handlers install, no chaining happens.
+        // The register's `go` will fire enterStateRec externally
+        // when the condition resolves; the state scope's finalizer
+        // (containing register's unsubscribe) runs on the way out.
+        runtime.handlers = null;
+        notifyHandlersChanged(runtime);
+        return;
+      }
       // Task state / condition-waiter that resolved — chain to next.
       yield* enterStateRec(runtime, result.target, result.payload, depth + 1, [
         ...trace,
@@ -626,6 +685,33 @@ const notifyHandlersChanged = <States, Events, Context, Output>(
 // MachineHandle construction
 // =============================================================================
 
+/**
+ * Shared machinery for the Effect-flavored subscribe siblings. Each
+ * one captures the caller's Effect runtime at subscribe time, wraps
+ * the user's Effect-returning callback as a plain callback that
+ * forks the Effect into that runtime, inserts the wrapped callback
+ * into the given subscriber set, and registers a finalizer that
+ * removes it when the caller's scope closes.
+ *
+ * Forking (rather than running synchronously) means a slow or
+ * long-running callback Effect can't stall subsequent subscriber
+ * notifications or the event loop. If a user needs sequencing, they
+ * can serialize work inside the callback themselves.
+ */
+const subscribeEffectShared = <Value>(
+  add: (cb: (value: Value) => void) => () => void,
+  cb: (value: Value) => Effect.Effect<void>,
+): Effect.Effect<void, never, Scope.Scope> =>
+  Effect.gen(function* () {
+    const effectRuntime = yield* Effect.runtime<never>();
+    const runFork = Runtime.runFork(effectRuntime);
+    const wrapped = (value: Value) => {
+      runFork(cb(value));
+    };
+    const remove = add(wrapped);
+    yield* Effect.addFinalizer(() => Effect.sync(remove));
+  });
+
 const buildHandle = <States, Events, Context, Output>(
   runtime: Runtime<States, Events, Context, Output>,
 ): MachineHandle<States, Events, Output> => {
@@ -713,31 +799,41 @@ const buildHandle = <States, Events, Context, Output>(
       };
     },
 
-    // Effect-flavored subscribes — deferred. Fail with typed
-    // NotImplemented so callers see it in the error channel;
-    // wiring lands in a follow-up commit.
-    subscribeEffect: (_cb: (output: Output) => Effect.Effect<void>) =>
-      Effect.fail(new NotImplemented({ feature: "subscribeEffect" })),
+    // Effect-flavored subscribes — each defers to the callback-based
+    // sibling above via `subscribeEffectShared`, which captures the
+    // caller's Effect runtime, forks the callback Effect on each
+    // notification, and ties cleanup to the caller's scope.
+    subscribeEffect: (cb: (output: Output) => Effect.Effect<void>) =>
+      subscribeEffectShared<Output>(handle.subscribe, cb),
     subscribeToEffect: (
-      _field: string,
-      _cb: (value: unknown) => Effect.Effect<void>,
-    ) => Effect.fail(new NotImplemented({ feature: "subscribeToEffect" })),
-    subscribeStateEffect: (_cb: (state: string) => Effect.Effect<void>) =>
-      Effect.fail(new NotImplemented({ feature: "subscribeStateEffect" })),
-    subscribeInStateEffect: (_name: string, _cb: () => Effect.Effect<void>) =>
-      Effect.fail(new NotImplemented({ feature: "subscribeInStateEffect" })),
-    subscribeCanDispatchEffect: (
-      _event: string,
-      _cb: (canDispatch: boolean) => Effect.Effect<void>,
+      field: string,
+      cb: (value: unknown) => Effect.Effect<void>,
     ) =>
-      Effect.fail(
-        new NotImplemented({ feature: "subscribeCanDispatchEffect" }),
+      subscribeEffectShared<unknown>(
+        (wrapped) => handle.subscribeTo(field, wrapped),
+        cb,
+      ),
+    subscribeStateEffect: (cb: (state: string) => Effect.Effect<void>) =>
+      subscribeEffectShared<string>(handle.subscribeState, cb),
+    subscribeInStateEffect: (name: string, cb: () => Effect.Effect<void>) =>
+      subscribeEffectShared<void>(
+        (wrapped) => handle.subscribeInState(name, wrapped),
+        cb,
+      ),
+    subscribeCanDispatchEffect: (
+      event: string,
+      cb: (canDispatch: boolean) => Effect.Effect<void>,
+    ) =>
+      subscribeEffectShared<boolean>(
+        (wrapped) => handle.subscribeCanDispatch(event, wrapped),
+        cb,
       ),
     subscribeAvailableEventsEffect: (
-      _cb: (events: ReadonlyArray<never>) => Effect.Effect<void>,
+      cb: (events: ReadonlyArray<never>) => Effect.Effect<void>,
     ) =>
-      Effect.fail(
-        new NotImplemented({ feature: "subscribeAvailableEventsEffect" }),
+      subscribeEffectShared<ReadonlyArray<never>>(
+        handle.subscribeAvailableEvents,
+        cb,
       ),
 
     dispatch: (event: string, ...args: [] | [unknown]) =>
@@ -745,8 +841,43 @@ const buildHandle = <States, Events, Context, Output>(
     dispatchOrFail: (event: string, ...args: [] | [unknown]) =>
       enqueue(runtime, event, args[0], "fail"),
 
-    awaitState: (_name: string) =>
-      Effect.fail(new NotImplemented({ feature: "awaitState" })),
+    // Suspend until the machine enters `name`. Short-circuits if we're
+    // already there (otherwise consumers of a settle-detector would
+    // hang if the machine happens to be settled on entry). Otherwise
+    // registers a one-shot entry in the same `subInState` set the
+    // callback-based `subscribeInState` uses; the next entry into
+    // `name` fires it and the async resolves. The cb removes itself
+    // whether it fires naturally or via Effect.async's interruption
+    // cleanup — Effect.async only invokes the returned Effect on
+    // interruption, so natural resolution needs the same removal
+    // inline inside the cb.
+    awaitState: (name: string) =>
+      Effect.async<void>((resume) => {
+        if (runtime.currentState === name) {
+          resume(Effect.void);
+          return;
+        }
+        let fired = false;
+        const removeFromSubs = (): void => {
+          const current = runtime.subInState.get(name);
+          if (!current) return;
+          current.delete(cb);
+          if (current.size === 0) runtime.subInState.delete(name);
+        };
+        const cb = () => {
+          if (fired) return;
+          fired = true;
+          removeFromSubs();
+          resume(Effect.void);
+        };
+        let subs = runtime.subInState.get(name);
+        if (!subs) {
+          subs = new Set();
+          runtime.subInState.set(name, subs);
+        }
+        subs.add(cb);
+        return Effect.sync(removeFromSubs);
+      }),
   };
 
   return handle as unknown as MachineHandle<States, Events, Output>;

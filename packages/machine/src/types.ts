@@ -17,6 +17,20 @@ export const TransitionTypeId = Symbol.for("@stax-ui/machine/Transition");
 export type TransitionTypeId = typeof TransitionTypeId;
 
 /**
+ * Internal marker — stamped on the Transition returned by
+ * `self.transitionAwait`. Tells the runtime "this is a pending
+ * async wait; register's `go` will fire later and drive the
+ * transition externally — don't chain to the target yet."
+ *
+ * Not part of the public surface. Users only observe plain
+ * `Transition`s; the sentinel bit is handled inside `enterStateRec`.
+ */
+export const TransitionAwaitTypeId = Symbol.for(
+  "@stax-ui/machine/TransitionAwait",
+);
+export type TransitionAwaitTypeId = typeof TransitionAwaitTypeId;
+
+/**
  * A state-change instruction — returned from a state fn or handler.
  * The runtime interprets it and drives the transition; state fns
  * don't call any `transition()` method imperatively.
@@ -72,20 +86,6 @@ export class TransitionLimit extends Data.TaggedError(
 )<{
   readonly depth: number;
   readonly trace: readonly string[];
-}> {}
-
-/**
- * Failure raised when an as-yet-unimplemented feature is called at
- * runtime. Present in the error channel of every deferred method so
- * type-level users know upfront that the call can fail — no
- * runtime surprises. Removed from the error channel of each method
- * as the feature lands in a follow-up commit.
- */
-export class NotImplemented extends Data.TaggedError(
-  "@stax-ui/machine/NotImplemented",
-)<{
-  readonly feature: string;
-  readonly detail?: string;
 }> {}
 
 /**
@@ -197,16 +197,12 @@ export interface MachineSelf<States, Events, Context> {
    * machine state, DOM event, socket, timer) and returns an
    * unsubscribe fn that fires when the state scope closes. Same
    * shape as `Effect.async`.
-   *
-   * Not implemented in the first-pass runtime — currently fails
-   * with `NotImplemented`. Follow-up commit removes that from the
-   * error channel once wiring lands.
    */
   transitionAwait<K extends keyof States & string>(
     register: (go: () => void) => () => void,
     name: K,
     ...args: PayloadArg<States[K]>
-  ): Effect.Effect<Transition<K, States[K]>, NotImplemented>;
+  ): Effect.Effect<Transition<K, States[K]>>;
 
   /**
    * Sugar over `Effect.addFinalizer` scoped to the current state's
@@ -377,25 +373,25 @@ export interface MachineHandle<States, Events, Output> {
   // -------- Effect-flavored subscribes (Stax-friendly) --------
   subscribeEffect(
     cb: (output: Output) => Effect.Effect<void>,
-  ): Effect.Effect<void, NotImplemented, Scope.Scope>;
+  ): Effect.Effect<void, never, Scope.Scope>;
   subscribeToEffect<K extends keyof Output>(
     field: K,
     cb: (value: Output[K]) => Effect.Effect<void>,
-  ): Effect.Effect<void, NotImplemented, Scope.Scope>;
+  ): Effect.Effect<void, never, Scope.Scope>;
   subscribeStateEffect(
     cb: (state: keyof States & string) => Effect.Effect<void>,
-  ): Effect.Effect<void, NotImplemented, Scope.Scope>;
+  ): Effect.Effect<void, never, Scope.Scope>;
   subscribeInStateEffect<K extends keyof States & string>(
     name: K,
     cb: () => Effect.Effect<void>,
-  ): Effect.Effect<void, NotImplemented, Scope.Scope>;
+  ): Effect.Effect<void, never, Scope.Scope>;
   subscribeCanDispatchEffect<K extends keyof Events & string>(
     event: K,
     cb: (canDispatch: boolean) => Effect.Effect<void>,
-  ): Effect.Effect<void, NotImplemented, Scope.Scope>;
+  ): Effect.Effect<void, never, Scope.Scope>;
   subscribeAvailableEventsEffect(
     cb: (events: ReadonlyArray<keyof Events & string>) => Effect.Effect<void>,
-  ): Effect.Effect<void, NotImplemented, Scope.Scope>;
+  ): Effect.Effect<void, never, Scope.Scope>;
 
   // -------- Dispatch --------
   dispatch<K extends keyof Events & string>(
@@ -408,14 +404,8 @@ export interface MachineHandle<States, Events, Output> {
   ): Effect.Effect<void, UnhandledEvent | MalformedSpec | TransitionLimit>;
 
   // -------- External coordination --------
-  /**
-   * Suspends until the machine enters `name`. Not implemented in
-   * the first-pass runtime — currently fails with `NotImplemented`.
-   * Follow-up commit removes that from the error channel.
-   */
-  awaitState<K extends keyof States & string>(
-    name: K,
-  ): Effect.Effect<void, NotImplemented>;
+  /** Suspends until the machine enters `name`. */
+  awaitState<K extends keyof States & string>(name: K): Effect.Effect<void>;
 }
 
 /**

@@ -167,10 +167,10 @@ const _f1: Effect.Effect<
 
 declare const register: (go: () => void) => () => void;
 
-const _ta1: Effect.Effect<
-  Transition<"signedOut", {}>,
-  import("./index.js").NotImplemented
-> = self.transitionAwait(register, "signedOut");
+const _ta1: Effect.Effect<Transition<"signedOut", {}>> = self.transitionAwait(
+  register,
+  "signedOut",
+);
 
 // @ts-expect-error - wrong target state.
 self.transitionAwait(register, "bogus");

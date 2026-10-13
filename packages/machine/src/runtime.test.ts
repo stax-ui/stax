@@ -632,3 +632,323 @@ describe("Machine runtime — Factory", () => {
     });
   });
 });
+
+// -----------------------------------------------------------------------------
+// transitionAwait, awaitState, and the Effect-flavored subscribe siblings
+// -----------------------------------------------------------------------------
+
+describe("Machine runtime — transitionAwait", () => {
+  interface WaiterStates {
+    pending: {};
+    done: {};
+  }
+  class Waiter extends Machine.Service<
+    Waiter,
+    WaiterStates,
+    {},
+    {},
+    {},
+    never
+  >()("Waiter") {}
+
+  it("transitions to the named state when the register's `go` is called", () => {
+    let capturedGo: (() => void) | null = null;
+    const layer = Machine.serviceLayer(
+      Waiter,
+      Effect.succeed({
+        initial: "pending" as const,
+        context: {},
+        output: () => ({}),
+        states: {
+          pending: (self) =>
+            self.transitionAwait((go) => {
+              capturedGo = go;
+              return () => {};
+            }, "done"),
+          done: () => Effect.succeed(undefined),
+        },
+      }),
+    );
+
+    return runScoped(
+      Effect.gen(function* () {
+        const waiter = yield* Waiter;
+        expect(waiter.state()).toBe("pending");
+        expect(capturedGo).not.toBeNull();
+
+        // Fire the register's `go` from outside — this should drive
+        // the machine into `done` on the next event-loop turn.
+        capturedGo!();
+        yield* Effect.yieldNow();
+
+        expect(waiter.state()).toBe("done");
+      }).pipe(Effect.provide(layer)),
+    );
+  });
+
+  it("fires the register's unsubscribe fn when the state is left", () => {
+    let unsubscribeFires = 0;
+    let capturedGo: (() => void) | null = null;
+    const layer = Machine.serviceLayer(
+      Waiter,
+      Effect.succeed({
+        initial: "pending" as const,
+        context: {},
+        output: () => ({}),
+        states: {
+          pending: (self) =>
+            self.transitionAwait((go) => {
+              capturedGo = go;
+              return () => {
+                unsubscribeFires++;
+              };
+            }, "done"),
+          done: () => Effect.succeed(undefined),
+        },
+      }),
+    );
+
+    return runScoped(
+      Effect.gen(function* () {
+        const waiter = yield* Waiter;
+        expect(unsubscribeFires).toBe(0);
+        capturedGo!();
+        yield* Effect.yieldNow();
+        expect(waiter.state()).toBe("done");
+        // State scope closed → register's cleanup ran exactly once.
+        expect(unsubscribeFires).toBe(1);
+      }).pipe(Effect.provide(layer)),
+    );
+  });
+
+  it("ignores subsequent `go` calls after the first", () => {
+    let transitions = 0;
+    let capturedGo: (() => void) | null = null;
+    const layer = Machine.serviceLayer(
+      Waiter,
+      Effect.succeed({
+        initial: "pending" as const,
+        context: {},
+        output: () => ({}),
+        states: {
+          pending: (self) =>
+            self.transitionAwait((go) => {
+              capturedGo = go;
+              return () => {};
+            }, "done"),
+          done: () =>
+            Effect.sync(() => {
+              transitions++;
+            }),
+        },
+      }),
+    );
+
+    return runScoped(
+      Effect.gen(function* () {
+        yield* Waiter;
+        capturedGo!();
+        capturedGo!();
+        capturedGo!();
+        yield* Effect.yieldNow();
+        expect(transitions).toBe(1);
+      }).pipe(Effect.provide(layer)),
+    );
+  });
+});
+
+describe("Machine runtime — awaitState", () => {
+  it("resolves immediately when the machine is already in the target state", () =>
+    withCounter((counter) =>
+      Effect.gen(function* () {
+        // Counter starts in `idle`; awaitState("idle") should resolve
+        // without waiting for any dispatch.
+        yield* counter.awaitState("idle");
+        expect(counter.state()).toBe("idle");
+      }),
+    ));
+
+  it("suspends until the machine enters the target state", () =>
+    withCounter((counter) =>
+      Effect.gen(function* () {
+        let arrived = false;
+        // Fork the waiter so we can dispatch the transition ourselves.
+        const fiber = yield* Effect.fork(
+          counter.awaitState("frozen").pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                arrived = true;
+              }),
+            ),
+          ),
+        );
+        // Still in idle — the fiber hasn't resolved.
+        yield* Effect.yieldNow();
+        expect(arrived).toBe(false);
+
+        yield* counter.dispatch("FREEZE");
+        yield* fiber.await;
+        expect(arrived).toBe(true);
+      }),
+    ));
+
+  it("cleans up its subInState entry on interruption", () =>
+    withCounter((counter) =>
+      Effect.gen(function* () {
+        // Start a waiter and immediately interrupt it. The entry
+        // should be gone so a later subscribeInState doesn't trip
+        // over the stale cb.
+        const fiber = yield* Effect.fork(counter.awaitState("frozen"));
+        yield* Effect.yieldNow();
+        yield* fiber.interruptAsFork(fiber.id());
+        yield* fiber.await;
+
+        // Nothing listening → entering `frozen` wires the normal
+        // path without surprises.
+        let frozenEntries = 0;
+        counter.subscribeInState("frozen", () => frozenEntries++);
+        yield* counter.dispatch("FREEZE");
+        expect(frozenEntries).toBe(1);
+      }),
+    ));
+});
+
+describe("Machine runtime — Effect-flavored subscribes", () => {
+  it("subscribeEffect fires the callback Effect on each output change", () =>
+    withCounter((counter) =>
+      Effect.gen(function* () {
+        const seen: number[] = [];
+        yield* counter.subscribeEffect((out) =>
+          Effect.sync(() => {
+            seen.push(out.count);
+          }),
+        );
+
+        yield* counter.dispatch("INC");
+        yield* counter.dispatch("INC");
+        // Forked callback Effects — give them a turn to run.
+        yield* Effect.yieldNow();
+        yield* Effect.yieldNow();
+
+        expect(seen).toEqual([1, 2]);
+      }),
+    ));
+
+  it("subscribeEffect unsubscribes when the caller's scope closes", async () => {
+    const seen: number[] = [];
+
+    await runScoped(
+      Effect.gen(function* () {
+        const counter = yield* Counter;
+
+        // Inner scope: subscription lives only for its duration.
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* counter.subscribeEffect((out) =>
+              Effect.sync(() => {
+                seen.push(out.count);
+              }),
+            );
+            yield* counter.dispatch("INC");
+            yield* Effect.yieldNow();
+          }),
+        );
+
+        // After the inner scope closed, the subscription is gone.
+        yield* counter.dispatch("INC");
+        yield* counter.dispatch("INC");
+        yield* Effect.yieldNow();
+      }).pipe(Effect.provide(CounterLayer)),
+    );
+
+    expect(seen).toEqual([1]);
+  });
+
+  it("subscribeToEffect only fires when the specified field changes", () =>
+    withCounter((counter) =>
+      Effect.gen(function* () {
+        const seen: number[] = [];
+        yield* counter.subscribeToEffect("count", (v) =>
+          Effect.sync(() => {
+            seen.push(v);
+          }),
+        );
+        yield* counter.dispatch("INC");
+        yield* counter.dispatch("INC");
+        yield* Effect.yieldNow();
+        yield* Effect.yieldNow();
+        expect(seen).toEqual([1, 2]);
+      }),
+    ));
+
+  it("subscribeStateEffect fires on each transition", () =>
+    withCounter((counter) =>
+      Effect.gen(function* () {
+        const seen: string[] = [];
+        yield* counter.subscribeStateEffect((s) =>
+          Effect.sync(() => {
+            seen.push(s);
+          }),
+        );
+        yield* counter.dispatch("FREEZE");
+        yield* counter.dispatch("UNFREEZE");
+        yield* Effect.yieldNow();
+        yield* Effect.yieldNow();
+        expect(seen).toEqual(["frozen", "idle"]);
+      }),
+    ));
+
+  it("subscribeInStateEffect fires only on entry to the named state", () =>
+    withCounter((counter) =>
+      Effect.gen(function* () {
+        let frozenEntries = 0;
+        yield* counter.subscribeInStateEffect("frozen", () =>
+          Effect.sync(() => {
+            frozenEntries++;
+          }),
+        );
+        yield* counter.dispatch("FREEZE");
+        yield* counter.dispatch("UNFREEZE");
+        yield* counter.dispatch("FREEZE");
+        yield* Effect.yieldNow();
+        yield* Effect.yieldNow();
+        expect(frozenEntries).toBe(2);
+      }),
+    ));
+
+  it("subscribeCanDispatchEffect reflects handler-map changes", () =>
+    withCounter((counter) =>
+      Effect.gen(function* () {
+        const seen: boolean[] = [];
+        yield* counter.subscribeCanDispatchEffect("INC", (can) =>
+          Effect.sync(() => {
+            seen.push(can);
+          }),
+        );
+        // idle → frozen: INC's handler disappears.
+        yield* counter.dispatch("FREEZE");
+        // frozen → idle: INC's handler returns.
+        yield* counter.dispatch("UNFREEZE");
+        yield* Effect.yieldNow();
+        yield* Effect.yieldNow();
+        expect(seen).toEqual([false, true]);
+      }),
+    ));
+
+  it("subscribeAvailableEventsEffect reflects the current state's event set", () =>
+    withCounter((counter) =>
+      Effect.gen(function* () {
+        const seen: ReadonlyArray<string>[] = [];
+        yield* counter.subscribeAvailableEventsEffect((events) =>
+          Effect.sync(() => {
+            seen.push([...events].sort());
+          }),
+        );
+        yield* counter.dispatch("FREEZE");
+        yield* counter.dispatch("UNFREEZE");
+        yield* Effect.yieldNow();
+        yield* Effect.yieldNow();
+        expect(seen).toEqual([["UNFREEZE"], ["DEC", "FREEZE", "INC"]]);
+      }),
+    ));
+});

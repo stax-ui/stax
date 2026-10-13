@@ -5,45 +5,237 @@
  * with typed events, per-state payloads, and snapshot/subscribe
  * outputs that any reactive framework can wrap.
  *
- * See `dev_notes/STATE_MACHINE_PROPOSAL.md` for the design rationale.
+ * The runtime is Effect-native: each state gets its own `Scope` that
+ * closes on transition out (finalizers fire, forked fibers cancel);
+ * context updates batch per handler into one subscriber notification;
+ * the event queue is FIFO under a per-machine mutex. `self` is only
+ * ever handed to callbacks the runtime invokes post-init, so it can't
+ * be observed before the machine's spec is built.
  *
- * ## Status
+ * ---
  *
- * First-pass runtime landed. Covered:
+ * ## Service machine — one instance per app
  *
- * - `Machine.Service` (singleton machines) + `Machine.serviceLayer`
- *   with an `Effect<Spec>` builder (services yielded in the outer
- *   Effect; `self` is passed to state fns / handlers / `ready` at
- *   invocation time — never in scope in the builder itself)
- * - `Machine.Factory` (instanced machines) + `Machine.factoryLayer`
- *   with an `Effect<{ spawn }>` builder — outer Effect yields shared
- *   services once; `spawn(args): Effect<Spec, never, Scope>` runs per
- *   instance and returns a fresh `MachineHandle` scoped to the
- *   caller's Scope
- * - `self.context` / `self.assign` / `self.dispatch` /
- *   `self.dispatchOrFail` / `self.transition` / `self.onExit`
- * - `ready: (self) => Effect<void, E, R | Scope>` hook for
- *   machine-lifetime setup (mirror subscriptions, long-lived
- *   forks) that needs `self` but has to outlive any single state
- * - Context store with per-handler batching (subscribers see one
- *   atomic notification per event)
- * - Event queue with per-machine mutex (FIFO, serial)
- * - State scope machinery — each state gets its own scope that
- *   closes on transition, firing finalizers and canceling
- *   forked fibers
- * - Output projection with reference-equal-diff notifications
- * - `snapshot` / `output` / `state` / `inState` / `canDispatch` /
- *   `availableEvents` / `dispatch` / `dispatchOrFail` on the handle
- * - `subscribe` / `subscribeTo` / `subscribeState` /
- *   `subscribeInState` — callback-based
+ * Use `Machine.Service` when there's logically one of these in your
+ * program (session, feature flags, a global websocket). The class is
+ * both the Context tag and the class the Layer registers against.
  *
- * Not yet:
- * - `self.transitionAwait` (register/go primitive)
- * - `awaitState` (external coordination)
- * - `subscribeEffect` / `subscribeToEffect` / etc. — Effect-flavored
- *   subscribe siblings
- * - `subscribeCanDispatch` / `subscribeAvailableEvents`
- * - Global `on:` handler map
+ * ```ts
+ * import { Effect, Layer } from "effect";
+ * import { Machine } from "@stax-ui/machine";
+ *
+ * // Payload per state — use `{}` where there's no payload. The
+ * // state-fn arg and the transition-arg for a given state are both
+ * // typed against the value here.
+ * interface SessionStates {
+ *   signedOut: {};
+ *   signingIn: { email: string };
+ *   signedIn: { user: User };
+ * }
+ *
+ * interface SessionEvents {
+ *   SIGN_IN: { email: string; password: string };
+ *   SIGN_OUT: {};
+ * }
+ *
+ * interface SessionContext {
+ *   user: User | null;
+ * }
+ *
+ * interface SessionOutput {
+ *   user: User | null;
+ *   isAuthenticated: boolean;
+ * }
+ *
+ * // Double-paren pattern matches `Effect.Service`: splitting the
+ * // class-declaration call from the type-parameter site lets TS
+ * // carry the `Self` binding through cleanly. The last generic is
+ * // whatever services the builder depends on.
+ * class SessionMachine extends Machine.Service<
+ *   SessionMachine,
+ *   SessionStates,
+ *   SessionEvents,
+ *   SessionContext,
+ *   SessionOutput,
+ *   AuthAPI
+ * >()("SessionMachine") {}
+ *
+ * // Live layer. The builder is an `Effect<Spec>` — yield services
+ * // in the outer Effect, return the spec. `self` is NOT in scope
+ * // here; the runtime passes it to each state fn as `(self, payload)`.
+ * export const SessionLive = Machine.serviceLayer(
+ *   SessionMachine,
+ *   Effect.gen(function* () {
+ *     const auth = yield* AuthAPI;
+ *     return {
+ *       initial: "signedOut" as const,
+ *       context: { user: null },
+ *       output: (ctx) => ({
+ *         user: ctx.user,
+ *         isAuthenticated: ctx.user !== null,
+ *       }),
+ *       states: {
+ *         signedOut: (self) =>
+ *           Effect.succeed({
+ *             SIGN_IN: ({ email, password }) =>
+ *               Effect.succeed(self.transition("signingIn", { email })),
+ *           }),
+ *         signingIn: (self, { email }) =>
+ *           Effect.gen(function* () {
+ *             const user = yield* auth.signIn({ email });
+ *             yield* self.assign({ user });
+ *             return self.transition("signedIn", { user });
+ *           }),
+ *         signedIn: (self) =>
+ *           Effect.succeed({
+ *             SIGN_OUT: () =>
+ *               Effect.gen(function* () {
+ *                 yield* self.assign({ user: null });
+ *                 return self.transition("signedOut");
+ *               }),
+ *           }),
+ *       },
+ *     };
+ *   }),
+ * );
+ *
+ * // Consume. `yield* SessionMachine` gives you the handle.
+ * const program = Effect.gen(function* () {
+ *   const session = yield* SessionMachine;
+ *   yield* session.dispatch("SIGN_IN", { email, password });
+ *   yield* session.awaitState("signedIn");
+ *   return session.snapshot();
+ * });
+ *
+ * Effect.runPromise(
+ *   program.pipe(
+ *     Effect.scoped,
+ *     Effect.provide(SessionLive),
+ *     Effect.provide(AuthAPILive),
+ *   ),
+ * );
+ * ```
+ *
+ * ---
+ *
+ * ## Factory machine — N instances, one per `.spawn(args)`
+ *
+ * Use `Machine.Factory` when you need many of them — one per dialog,
+ * one per chat conversation, one per polling fetcher. Each spawned
+ * instance is a fresh `MachineHandle` scoped to the caller's Scope,
+ * so it tears down with the component that spawned it.
+ *
+ * ```ts
+ * interface FetcherStates {
+ *   idle: {};
+ *   fetching: {};
+ *   loaded: { data: Data };
+ *   failed: { error: FetchError };
+ * }
+ * interface FetcherEvents {
+ *   FETCH: {};
+ *   RETRY: {};
+ * }
+ * interface FetcherContext {
+ *   url: string;
+ *   data: Data | null;
+ *   error: FetchError | null;
+ * }
+ * interface FetcherOutput {
+ *   url: string;
+ *   data: Data | null;
+ *   error: FetchError | null;
+ * }
+ * // Inputs — the args shape for `.spawn(args)`.
+ * interface FetcherInputs {
+ *   url: string;
+ * }
+ *
+ * class FetcherMachine extends Machine.Factory<
+ *   FetcherMachine,
+ *   FetcherStates,
+ *   FetcherEvents,
+ *   FetcherInputs,
+ *   FetcherContext,
+ *   FetcherOutput,
+ *   HttpClient
+ * >()("FetcherMachine") {}
+ *
+ * // Live layer. The outer `Effect<{ spawn }>` runs once at
+ * // layer-construction time — yield services shared across every
+ * // spawn. `spawn(args)` runs on each `.spawn` call and returns the
+ * // instance's spec.
+ * export const FetcherLive = Machine.factoryLayer(
+ *   FetcherMachine,
+ *   Effect.gen(function* () {
+ *     const http = yield* HttpClient;
+ *     return {
+ *       spawn: ({ url }) =>
+ *         Effect.succeed({
+ *           initial: "idle" as const,
+ *           context: { url, data: null, error: null },
+ *           output: (ctx) => ({
+ *             url: ctx.url,
+ *             data: ctx.data,
+ *             error: ctx.error,
+ *           }),
+ *           states: {
+ *             idle: (self) =>
+ *               Effect.succeed({
+ *                 FETCH: () => Effect.succeed(self.transition("fetching")),
+ *               }),
+ *             fetching: (self) =>
+ *               http.get(self.context.url).pipe(
+ *                 Effect.flatMap((data) =>
+ *                   Effect.gen(function* () {
+ *                     yield* self.assign({ data });
+ *                     return self.transition("loaded", { data });
+ *                   }),
+ *                 ),
+ *                 Effect.catchAll((error) =>
+ *                   Effect.gen(function* () {
+ *                     yield* self.assign({ error });
+ *                     return self.transition("failed", { error });
+ *                   }),
+ *                 ),
+ *               ),
+ *             loaded: (self) =>
+ *               Effect.succeed({
+ *                 FETCH: () => Effect.succeed(self.transition("fetching")),
+ *               }),
+ *             failed: (self) =>
+ *               Effect.succeed({
+ *                 RETRY: () => Effect.succeed(self.transition("fetching")),
+ *               }),
+ *           },
+ *         }),
+ *     };
+ *   }),
+ * );
+ *
+ * // Consume. `yield* FetcherMachine` gives you the factory; call
+ * // `.spawn(args)` to get a per-instance handle.
+ * const program = Effect.gen(function* () {
+ *   const fetchers = yield* FetcherMachine;
+ *   const posts = yield* fetchers.spawn({ url: "/api/posts" });
+ *   yield* posts.dispatch("FETCH");
+ *   yield* posts.awaitState("loaded");
+ *   return posts.snapshot();
+ * });
+ *
+ * Effect.runPromise(
+ *   program.pipe(
+ *     Effect.scoped,
+ *     Effect.provide(FetcherLive),
+ *     Effect.provide(HttpClientLive),
+ *   ),
+ * );
+ * ```
+ *
+ * ---
+ *
+ * ## Not yet
+ * - Global `on:` handler map (spec-level fallback handlers)
  */
 
 import { Context, Effect, Layer, type Scope } from "effect";
@@ -77,7 +269,6 @@ export type {
 export {
   MachineUninitialized,
   MalformedSpec,
-  NotImplemented,
   TransitionLimit,
   UnhandledEvent,
 } from "./types.js";
@@ -192,11 +383,6 @@ export const Service =
  * Base class factory for instanced machines. See `Service`. The
  * yielded service is a `MachineFactory` — call `.spawn(args)` on it
  * to produce a fresh instance per parent.
- *
- * **Runtime not implemented in this commit** — the class factory
- * compiles for use-site type-checking but attempting to actually
- * yield or spawn will die. Wiring lands in a follow-up alongside
- * `factoryLayer`.
  */
 export const Factory =
   <Self, States, Events, Inputs, Context, Output, R = never>() =>
