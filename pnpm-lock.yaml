@@ -9,6 +9,7 @@ overrides:
   '@stax-ui/core': workspace:*
   '@stax-ui/dom': workspace:*
   '@stax-ui/form': workspace:*
+  '@stax-ui/machine': workspace:*
   '@stax-ui/platform': workspace:*
   '@stax-ui/router': workspace:*
   '@stax-ui/vite-plugin': workspace:*
@@ -147,6 +148,37 @@ importers:
       '@stax-ui/form':
         specifier: workspace:*
         version: link:../../packages/form
+      '@tailwindcss/vite':
+        specifier: ^4.1.18
+        version: 4.3.3(vite@7.3.6(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.0))
+      effect:
+        specifier: 3.19.19
+        version: 3.19.19
+      tailwindcss:
+        specifier: ^4.1.18
+        version: 4.3.3
+    devDependencies:
+      daisyui:
+        specifier: ^5.5.18
+        version: 5.7.22
+      typescript:
+        specifier: ~5.9.3
+        version: 5.9.3
+      vite:
+        specifier: ^7.0.0
+        version: 7.3.6(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.0)
+
+  examples/media-player:
+    dependencies:
+      '@stax-ui/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@stax-ui/dom':
+        specifier: workspace:*
+        version: link:../../packages/dom
+      '@stax-ui/machine':
+        specifier: workspace:*
+        version: link:../../packages/machine
       '@tailwindcss/vite':
         specifier: ^4.1.18
         version: 4.3.3(vite@7.3.6(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.0))

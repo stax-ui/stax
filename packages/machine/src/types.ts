@@ -264,6 +264,14 @@ export type HandlerMap<States, Events, E = SelfMethodErrors, R = never> = {
  *
  * Condition-waiters return `self.transitionAwait(...)`, which
  * resolves to an `AnyTransition` on the register callback firing.
+ *
+ * State fns run with the state's `Scope` auto-provided, so entry
+ * code can use `self.onExit`, `Effect.addFinalizer`,
+ * `Effect.forkScoped`, or any other scoped effect without the
+ * caller having to add `Scope.Scope` to the Spec's `R`. (The
+ * `HandlerMap` handlers themselves don't get a Scope — they run
+ * from the drain loop. Scoped work goes in state-fn entry, not in
+ * handlers.)
  */
 export type StateFn<
   K extends keyof States,
@@ -278,7 +286,7 @@ export type StateFn<
 ) => Effect.Effect<
   HandlerMap<States, Events, E, R> | AnyTransition<States> | void,
   E,
-  R
+  R | Scope.Scope
 >;
 
 // =============================================================================
