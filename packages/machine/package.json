@@ -44,10 +44,13 @@
   "scripts": {
     "build": "tsup"
   },
-  "dependencies": {
+  "peerDependencies": {
+    "effect": "^3.0.0",
     "@stax-ui/core": "workspace:^"
   },
-  "peerDependencies": {
-    "effect": "^3.0.0"
+  "peerDependenciesMeta": {
+    "@stax-ui/core": {
+      "optional": true
+    }
   }
 }

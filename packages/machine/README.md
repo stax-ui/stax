@@ -12,10 +12,12 @@ pnpm add @stax-ui/machine effect
 
 ## Subpath exports
 
-| Import path | Purpose |
-|---|---|
-| `@stax-ui/machine` | The runtime: `Machine.Service`, `Machine.Factory`, their Layer constructors, `MachineHandle` / `MachineSelf` types. Framework-neutral — no UI dependency. |
-| `@stax-ui/machine/stax` | Readable adapters for Stax: turns a `MachineHandle`'s snapshot + subscribe surface into `@stax-ui/core` Readables so Stax components can bind to the machine declaratively. Pulls in `@stax-ui/core`. |
+| Import path | Purpose | Extra install |
+|---|---|---|
+| `@stax-ui/machine` | The runtime: `Machine.Service`, `Machine.Factory`, their Layer constructors, `MachineHandle` / `MachineSelf` types. Framework-neutral — no UI dependency. | — |
+| `@stax-ui/machine/stax` | Readable adapters for Stax: turns a `MachineHandle`'s snapshot + subscribe surface into `@stax-ui/core` Readables so Stax components can bind to the machine declaratively. | `@stax-ui/core` (optional peer) |
+
+The target UI library for each framework-specific subpath is an **optional peer dependency**, so you only install what you actually use. Any real Stax app already has `@stax-ui/core` via `@stax-ui/dom`, so there's nothing extra to add in that case — the peer flag just makes the dependency explicit for consumers using the runtime without Stax.
 
 Peer adapters for other UI libraries (React, Vue, Solid, …) can land under `@stax-ui/machine/<framework>` the same way. The core runtime is UI-neutral; the adapters just translate the subscription primitives into whatever reactive shape the target library uses.
 
