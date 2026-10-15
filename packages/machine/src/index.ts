@@ -238,13 +238,11 @@ import { Context, Effect, Layer, type Scope } from "effect";
 import type * as ContextModule from "effect/Context";
 
 import { createFactoryRuntime, createRuntime } from "./runtime.js";
-import {
-  MalformedSpec,
-  TransitionLimit,
-  type MachineFactory,
-  type MachineHandle,
-  type Spec,
-  type TaggedError,
+import type {
+  MachineFactory,
+  MachineHandle,
+  Spec,
+  TaggedError,
 } from "./types.js";
 
 // =============================================================================
@@ -266,7 +264,6 @@ export type {
 export {
   MachineUninitialized,
   MalformedSpec,
-  TransitionLimit,
   UnhandledEvent,
 } from "./types.js";
 
@@ -317,7 +314,7 @@ export interface ServiceClass<
   readonly [_deps]?: R;
   readonly [_caught]?: CaughtTags;
   readonly [_userE]?: UserE;
-  Default?: Layer.Layer<Self, MalformedSpec | TransitionLimit, R>;
+  Default?: Layer.Layer<Self, never, R>;
 }
 
 /**
@@ -511,20 +508,11 @@ export const serviceLayer = <
     UserE
   >,
   builder: Effect.Effect<
-    Spec<
-      States,
-      Events,
-      Context,
-      Output,
-      UserE | MalformedSpec | TransitionLimit,
-      never,
-      CaughtTags,
-      UserE
-    >,
+    Spec<States, Events, Context, Output, UserE, never, CaughtTags, UserE>,
     never,
     R
   >,
-): Layer.Layer<Self, MalformedSpec | TransitionLimit, R> => {
+): Layer.Layer<Self, never, R> => {
   const tag = cls as unknown as Context.Tag<
     Self,
     MachineHandle<States, Events, Output, CaughtTags, UserE>
@@ -598,16 +586,7 @@ export const factoryLayer = <
       spawn: (
         args: Inputs,
       ) => Effect.Effect<
-        Spec<
-          States,
-          Events,
-          Context,
-          Output,
-          UserE | MalformedSpec | TransitionLimit,
-          never,
-          CaughtTags,
-          UserE
-        >,
+        Spec<States, Events, Context, Output, UserE, never, CaughtTags, UserE>,
         never,
         Scope.Scope
       >;

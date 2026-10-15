@@ -17,9 +17,10 @@
  * - Handler installation timing — state fn's Effect runs first,
  *   handlers install on return.
  * - Transition value interpretation — `self.transition(...)`'s
- *   returned value drives the next state entry; reentrant
- *   transitions are supported up to `REENTRY_DEPTH_CAP`, past which
- *   `TransitionLimit` fires.
+ *   returned value drives the next state entry. Sync-transition
+ *   chains are trampolined (loop, not recursion), so cycles are
+ *   stack-safe. There's no depth cap: convergent cycles run through
+ *   cleanly, non-convergent ones spin the fiber until interrupted.
  * - Event dispatch precedence — per-state handler map first, then
  *   spec-level `on:` map. Globals fire even in condition-wait or
  *   task states (no local handler map); if a global returns a
@@ -31,7 +32,6 @@ import { Effect, Exit, Predicate, Record, Runtime, Scope } from "effect";
 import {
   MalformedSpec,
   TransitionAwaitTypeId,
-  TransitionLimit,
   TransitionTypeId,
   UnhandledEvent,
   type HandlerMap,
@@ -87,9 +87,6 @@ const shallowEqual = (a: unknown, b: unknown): boolean => {
   }
   return true;
 };
-
-/** Max chained transitions in a single event-processing cycle. */
-const REENTRY_DEPTH_CAP = 32;
 
 /**
  * Wrap an Effect with `Effect.catchTags` for each handler the spec
@@ -219,22 +216,13 @@ export const createRuntime = <
   UserE extends TaggedError = never,
 >(
   builder: Effect.Effect<
-    Spec<
-      States,
-      Events,
-      Context,
-      Output,
-      UserE | MalformedSpec | TransitionLimit,
-      never,
-      CaughtTags,
-      UserE
-    >,
+    Spec<States, Events, Context, Output, UserE, never, CaughtTags, UserE>,
     never,
     R
   >,
 ): Effect.Effect<
   MachineHandle<States, Events, Output, CaughtTags, UserE>,
-  MalformedSpec | TransitionLimit,
+  never,
   R | Scope.Scope
 > =>
   Effect.gen(function* () {
@@ -273,16 +261,7 @@ export const createFactoryRuntime = <
       spawn: (
         args: Inputs,
       ) => Effect.Effect<
-        Spec<
-          States,
-          Events,
-          Context,
-          Output,
-          UserE | MalformedSpec | TransitionLimit,
-          never,
-          CaughtTags,
-          UserE
-        >,
+        Spec<States, Events, Context, Output, UserE, never, CaughtTags, UserE>,
         never,
         Scope.Scope
       >;
@@ -332,21 +311,9 @@ const instantiateMachine = <
   CaughtTags extends string,
   UserE extends TaggedError,
 >(
-  spec: Spec<
-    States,
-    Events,
-    Context,
-    Output,
-    UserE | MalformedSpec | TransitionLimit,
-    never,
-    CaughtTags,
-    UserE
-  >,
+  spec: Spec<States, Events, Context, Output, UserE, never, CaughtTags, UserE>,
   parentScope: Scope.Scope,
-): Effect.Effect<
-  MachineHandle<States, Events, Output, CaughtTags, UserE>,
-  MalformedSpec | TransitionLimit
-> =>
+): Effect.Effect<MachineHandle<States, Events, Output, CaughtTags, UserE>> =>
   Effect.gen(function* () {
     // ---- Runtime init ----
     // Two-step: allocate with a placeholder `self` so `self`
@@ -425,14 +392,13 @@ const instantiateMachine = <
             // happen on the Effect that invoked `go` — that's an
             // external callback with no fiber of its own. Run the
             // transition on a fresh fiber. MalformedSpec /
-            // TransitionLimit from an external trigger are
-            // genuinely unrecoverable at this entry point, so
-            // orDie them — subscribers see the transition settle
-            // (or not) via subscribeState etc.
+            // User errors or MalformedSpec defects from the state
+            // graph are unrecoverable at this entry point — the
+            // register's go callback has no caller to surface them
+            // to — so orDie. Subscribers observe the transition
+            // settle (or not) via subscribeState etc.
             Effect.runFork(
-              enterStateRec(runtime, name, payload, 0, [
-                runtime.currentState,
-              ]).pipe(Effect.orDie),
+              enterState(runtime, name, payload).pipe(Effect.orDie),
             );
           });
           // Register unsubscribe on the state scope — if the
@@ -483,7 +449,13 @@ const instantiateMachine = <
     // state is a task state that immediately transitions, we settle
     // through the chain here; if it installs handlers, they're
     // installed by the time dispatch calls arrive.
-    yield* enterState(runtime, spec.initial, {});
+    //
+    // Bootstrap failures (MalformedSpec defect, user errors from
+    // the initial state fn) die rather than widen the Layer error
+    // channel: a machine that can't finish entering its initial
+    // state is a hard configuration bug, not something an app
+    // should "handle."
+    yield* enterState(runtime, spec.initial, {}).pipe(Effect.orDie);
 
     // The runtime-side handle is built with the generic-free self
     // shape; cast at the boundary to the caller's full generics.
@@ -501,112 +473,118 @@ const instantiateMachine = <
 // =============================================================================
 
 /**
- * Enter a state: close the previous state scope, create a new one,
- * run the state fn in it, install handlers or interpret the returned
- * Transition, then drain the event queue.
+ * Enter a state and process its chain of synchronous transitions.
+ *
+ * Trampolined: each sync `self.transition(...)` from a task state
+ * loops back into the next iteration rather than recursing. There
+ * is no depth cap — a legitimate conditional cycle (A → B → A → C,
+ * where B flipped the condition) runs through cleanly, and an
+ * infinite loop spins the fiber instead of overflowing the stack.
+ * The fiber stays interruptable (scope close kills it) and
+ * convergent cycles cost nothing.
+ *
+ * Three exit paths per iteration:
+ * - `transitionAwait` sentinel → hold the state, no handlers
+ *   install, no drain. The register's `go` fires enterState
+ *   externally on resolution.
+ * - plain `Transition` → loop with new target/payload (task state
+ *   chain).
+ * - `HandlerMap` / void → install handlers, notify
+ *   handleable-events subscribers, drain the queue, return.
+ *
+ * Error channel is wide (`unknown`) so user-defined tagged errors
+ * from state fns propagate up to whichever caller is wrapping this
+ * entry: `applyCatches` on the dispatch surfaces, or `Effect.orDie`
+ * for bootstrap entry and `transitionAwait` go callbacks.
  */
 const enterState = <States, Events, Context, Output>(
   runtime: Runtime<States, Events, Context, Output>,
-  name: string,
-  payload: unknown,
-): Effect.Effect<void, MalformedSpec | TransitionLimit> =>
-  enterStateRec(runtime, name, payload, 0, []);
-
-const enterStateRec = <States, Events, Context, Output>(
-  runtime: Runtime<States, Events, Context, Output>,
-  name: string,
-  payload: unknown,
-  depth: number,
-  trace: readonly string[],
-): Effect.Effect<void, MalformedSpec | TransitionLimit> =>
+  initialName: string,
+  initialPayload: unknown,
+): Effect.Effect<void, unknown> =>
   Effect.gen(function* () {
-    if (depth > REENTRY_DEPTH_CAP) {
-      return yield* new TransitionLimit({ depth, trace: [...trace, name] });
-    }
+    let name = initialName;
+    let payload = initialPayload;
 
-    // Close the previous state scope (fires finalizers, cancels forked fibers).
-    if (runtime.stateScope) {
-      const closing = runtime.stateScope;
-      runtime.stateScope = null;
-      yield* Scope.close(closing, Exit.void);
-    }
-
-    // Clear handlers — new state hasn't installed its map yet.
-    runtime.handlers = null;
-
-    // Locate the state fn.
-    const stateFn = runtime.spec.states[name as keyof States];
-
-    if (!stateFn) {
-      return yield* new MalformedSpec({
-        reason: `state machine has no state named "${name}"`,
-        state: name,
-      });
-    }
-
-    // Enter the new state.
-    runtime.currentState = name;
-    runtime.currentPayload = payload;
-    notifyState(runtime, name);
-
-    // New scope for this state.
-    const stateScope = yield* Scope.make();
-    runtime.stateScope = stateScope;
-
-    // Run the state fn in the state's scope, passing self. State
-    // fns are typed with the user's full E channel (`UserE |
-    // SelfMethodErrors`); the runtime treats user-tagged errors as
-    // tagged values that propagate through the drain loop and are
-    // matched at `applyCatches` on the dispatch boundary, so we
-    // narrow the extra channel at the type level here. Behavior
-    // is unchanged — Effect carries the actual error through —
-    // only the static narrowing moves.
-    const result = yield* (
-      stateFn(
-        runtime.self,
-        payload as States[keyof States],
-      ) as unknown as Effect.Effect<
-        unknown,
-        MalformedSpec | TransitionLimit,
-        Scope.Scope
-      >
-    ).pipe(Effect.provideService(Scope.Scope, stateScope));
-
-    // Interpret the return value.
-    if (isTransition(result)) {
-      if (isTransitionAwait(result)) {
-        // Pending async wait — the state fn's transitionAwait set
-        // up a register listener and returned a sentinel. Hold the
-        // state here: no handlers install, no chaining happens.
-        // The register's `go` will fire enterStateRec externally
-        // when the condition resolves; the state scope's finalizer
-        // (containing register's unsubscribe) runs on the way out.
-        runtime.handlers = null;
-        notifyHandlersChanged(runtime);
-        return;
+    while (true) {
+      // Close the previous state scope (fires finalizers, cancels
+      // forked fibers).
+      if (runtime.stateScope) {
+        const closing = runtime.stateScope;
+        runtime.stateScope = null;
+        yield* Scope.close(closing, Exit.void);
       }
-      // Task state / condition-waiter that resolved — chain to next.
-      yield* enterStateRec(runtime, result.target, result.payload, depth + 1, [
-        ...trace,
-        name,
-      ]);
+
+      // Clear handlers — new state hasn't installed its map yet.
+      runtime.handlers = null;
+
+      // Locate the state fn. Missing name is a type-system escape
+      // (dynamic key, `as never`, etc.) — treat as a defect.
+      const stateFn = runtime.spec.states[name as keyof States];
+      if (!stateFn) {
+        return yield* Effect.die(
+          new MalformedSpec({
+            reason: `state machine has no state named "${name}"`,
+            state: name,
+          }),
+        );
+      }
+
+      // Enter the new state.
+      runtime.currentState = name;
+      runtime.currentPayload = payload;
+      notifyState(runtime, name);
+
+      // New scope for this state.
+      const stateScope = yield* Scope.make();
+      runtime.stateScope = stateScope;
+
+      // Run the state fn in the state's scope, passing self. User
+      // errors propagate through the Effect error channel; the
+      // runtime treats them as opaque tagged values here and lets
+      // them bubble to whichever boundary is wrapping this entry.
+      const result = yield* (
+        stateFn(
+          runtime.self,
+          payload as States[keyof States],
+        ) as unknown as Effect.Effect<unknown, unknown, Scope.Scope>
+      ).pipe(Effect.provideService(Scope.Scope, stateScope));
+
+      // Interpret the return value.
+      if (isTransition(result)) {
+        if (isTransitionAwait(result)) {
+          // Pending async wait — the state fn's transitionAwait set
+          // up a register listener and returned a sentinel. Hold
+          // the state here: no handlers install, no chaining
+          // happens. The register's `go` will fire enterState
+          // externally when the condition resolves.
+          runtime.handlers = null;
+          notifyHandlersChanged(runtime);
+          return;
+        }
+        // Task state / condition-waiter that resolved — loop to
+        // the next state entry with the fresh target/payload.
+        name = result.target;
+        payload = result.payload;
+        continue;
+      }
+
+      if (result && typeof result === "object") {
+        // Active state — install handlers.
+        runtime.handlers = result as HandlerMap<States, Events>;
+      } else {
+        // void — no-op state. Handlers stay null.
+        runtime.handlers = null;
+      }
+
+      // Now that the handler map is settled for this state, notify
+      // canDispatch / availableEvents subscribers.
+      notifyHandlersChanged(runtime);
+
+      // Drain any events queued during entry.
+      yield* drainQueue(runtime);
       return;
     }
-
-    if (result && typeof result === "object") {
-      // Active state — install handlers.
-      runtime.handlers = result as HandlerMap<States, Events>;
-    } else {
-      // void — no-op state. Handlers stay null.
-      runtime.handlers = null;
-    }
-
-    // Now that the handler map is settled for this state, notify
-    // canDispatch / availableEvents subscribers.
-    notifyHandlersChanged(runtime);
-
-    // Drain any events queued during entry.
-    yield* drainQueue(runtime);
   });
 
 // =============================================================================
@@ -624,7 +602,7 @@ const enqueue = <States, Events, Context, Output>(
   event: string,
   payload: unknown,
   mode: "ignore" | "fail" = "ignore",
-): Effect.Effect<void, UnhandledEvent | MalformedSpec | TransitionLimit> =>
+): Effect.Effect<void, unknown> =>
   Effect.gen(function* () {
     if (mode === "fail") {
       const localHas =
@@ -713,7 +691,7 @@ const hasAnyHandlers = <States, Events, Context, Output>(
  */
 const drainQueue = <States, Events, Context, Output>(
   runtime: Runtime<States, Events, Context, Output>,
-): Effect.Effect<void, MalformedSpec | TransitionLimit> =>
+): Effect.Effect<void, unknown> =>
   Effect.suspend(() => {
     if (runtime.isProcessing) return Effect.void;
 
@@ -748,15 +726,13 @@ const drainQueue = <States, Events, Context, Output>(
 
         if (isTransition(result)) {
           // Transition mid-drain — release the processing flag so
-          // enterStateRec can re-enter drainQueue cleanly after the
+          // enterState can re-enter drainQueue cleanly after the
           // new state's handlers install. (The ensuring below would
-          // also clear it after enterStateRec returns; clearing early
-          // is what lets the recursive drain proceed.)
+          // also clear it after enterState returns; clearing early
+          // is what lets the nested drain proceed.)
           runtime.isProcessing = false;
-          yield* enterStateRec(runtime, result.target, result.payload, 0, [
-            runtime.currentState,
-          ]);
-          return; // enterStateRec will drain any remaining events
+          yield* enterState(runtime, result.target, result.payload);
+          return; // enterState will drain any remaining events
         }
         // Non-transition returns keep us in the current state; loop continues.
       }

@@ -53,33 +53,22 @@ export class UnhandledEvent extends Data.TaggedError("UnhandledEvent")<{
 }> {}
 
 /**
- * Failure raised when the runtime tries to enter a state whose name
- * doesn't appear in the spec's `states` map. Fires on the initial
- * state entry (from Layer build) or on any `self.transition` that
- * targets a missing name — TS should catch the latter, but a
- * cast-through or dynamic call can still land here at runtime.
+ * Raised as an Effect **defect** (`Effect.die`) when the runtime
+ * tries to enter a state whose name doesn't appear in the spec's
+ * `states` map. The type system already rejects
+ * `self.transition("bogus")` at compile time; landing here at runtime
+ * requires fighting the types with `as never` or dynamic key access,
+ * so it's treated as a programmer bug rather than a recoverable
+ * condition.
  *
- * Framework-side "programmer bug" surface — but tagged and
- * catchable so production callers can log-and-recover rather than
- * crash the process.
+ * Not a typed error — it never appears on `dispatch`'s error
+ * channel. Recovery requires `Effect.catchAllCause` /
+ * `Effect.catchAllDefect` upstream; the common case is "let it crash
+ * the fiber and surface in the defect reporter."
  */
 export class MalformedSpec extends Data.TaggedError("MalformedSpec")<{
   readonly reason: string;
   readonly state?: string;
-}> {}
-
-/**
- * Failure raised when the runtime chains too many transitions in a
- * single event-processing cycle — typically indicates an infinite
- * transition loop in the state fns (state A transitions to B whose
- * entry transitions back to A, etc.). Depth cap is 32 by default.
- *
- * Carries the sequence of states we bounced through so the loop is
- * diagnosable from the error alone.
- */
-export class TransitionLimit extends Data.TaggedError("TransitionLimit")<{
-  readonly depth: number;
-  readonly trace: readonly string[];
 }> {}
 
 /**
@@ -116,37 +105,25 @@ export class MachineUninitialized extends Data.TaggedError(
 export type TaggedError = { readonly _tag: string };
 
 /**
- * Every error that can surface on a dispatch Effect: the runtime
- * errors the machine itself raises (`MalformedSpec`,
- * `TransitionLimit`) plus any `UserE` the spec's handlers can yield.
- *
- * Used wherever we talk about "all errors a dispatch surface could
- * fail with before `catch` narrows them" — the catch map keys off
- * this union's `_tag`s, and the dispatch surface's declared error
- * channel is this union minus `CaughtTags`.
- */
-export type AllErrors<UserE extends TaggedError = never> =
-  UserE | MalformedSpec | TransitionLimit;
-
-/**
  * Spec-level `catch` block — one handler per tagged error the user
  * wants the runtime to absorb at the dispatch boundary. Keys are
- * `_tag` strings (e.g. `"MalformedSpec"`, `"TransitionLimit"`, or
- * whatever `_tag` a user-defined `TaggedError` carries). Each value
- * takes the specific error whose `_tag` matches and returns an
- * `Effect<void>` — die, log, no-op, whatever recovery policy fits.
+ * the `_tag` strings of the `UserE` subclasses the machine
+ * declared. Each value takes the specific error whose `_tag`
+ * matches and returns an `Effect<void>` — die, log, no-op, whatever
+ * recovery policy fits.
  *
  * `CaughtTags` is the subset of tags the user declared the machine
  * would catch (via the Service/Factory class's `CaughtTags`
  * generic); keys are typed against that subset so the compiler
- * refuses incomplete maps.
+ * refuses incomplete maps. Framework runtime bugs (`MalformedSpec`)
+ * are not catchable here — they die as defects.
  */
 export type CatchHandlerMap<
   CaughtTags extends string,
   UserE extends TaggedError = never,
 > = {
   readonly [T in CaughtTags]: (
-    e: Extract<AllErrors<UserE>, { readonly _tag: T }>,
+    e: Extract<UserE, { readonly _tag: T }>,
   ) => Effect.Effect<void>;
 };
 
@@ -164,15 +141,19 @@ export type AnyTransition<States> = {
 }[keyof States];
 
 /**
- * `AllErrors<UserE>` with any tags listed in `CaughtTags` excluded.
- * Shared helper for the dispatch surfaces — the declared error
- * channel on `handle.dispatch` / `self.dispatch` / their `OrFail`
- * siblings is this type.
+ * `UserE` with any tags listed in `CaughtTags` excluded. Shared
+ * helper for the dispatch surfaces — the declared error channel on
+ * `handle.dispatch` / `self.dispatch` / their `OrFail` siblings is
+ * this type.
+ *
+ * Framework runtime bugs (`MalformedSpec`, formerly `TransitionLimit`)
+ * are never on this channel — they die as defects. The whole dispatch
+ * error channel is user-domain errors only.
  */
 export type UncaughtErrors<
   CaughtTags extends string,
   UserE extends TaggedError = never,
-> = Exclude<AllErrors<UserE>, { readonly _tag: CaughtTags }>;
+> = Exclude<UserE, { readonly _tag: CaughtTags }>;
 
 /**
  * `[payload?]` tuple if a state's payload has no keys (`{}`),
@@ -283,21 +264,17 @@ export interface MachineSelf<
 // =============================================================================
 
 /**
- * Errors a state fn or handler can propagate implicitly through
- * runtime processing of its result — a bad transition target
- * (`MalformedSpec`) or a chain of transitions that trips the depth
- * cap (`TransitionLimit`). Widened into `HandlerMap` / `StateFn` /
- * `Spec`'s default `E` channel so callers don't have to pass
- * generics explicitly.
+ * Default error channel for state fns and handlers. Empty by
+ * construction — runtime bugs (`MalformedSpec` from a bad transition
+ * target) die as defects rather than propagating through the typed
+ * error channel, and user errors are opt-in via the Service/Factory
+ * class's `UserE` generic.
  *
- * Note: `MachineUninitialized` is deliberately absent. `self` is
- * only reachable from callbacks the runtime invokes post-init
- * (state fns, handlers, `ready`), so self methods never fail with
- * uninitialized. The error type is kept in the module for the
- * defensive case where someone smuggles `self` out of its
- * intended scope, but the common types don't carry it.
+ * Kept as a named alias so widening the implicit channel in the
+ * future (e.g., adding a cancellation signal) has one place to
+ * touch.
  */
-type SelfMethodErrors = MalformedSpec | TransitionLimit;
+type SelfMethodErrors = never;
 
 /**
  * Per-state handler map. Each key is an event name; each handler
@@ -463,24 +440,20 @@ export type Spec<
     ? {}
     : {
         /**
-         * Spec-level catch handlers, one per tagged error the
-         * machine declared it would absorb. When a dispatch surface
-         * (`handle.dispatch` / `handle.dispatchOrFail` /
-         * `self.dispatch` / `self.dispatchOrFail`) would fail with
+         * Spec-level catch handlers, one per user-defined tagged
+         * error the machine declared it would absorb. When a
+         * dispatch surface (`handle.dispatch` / `handle.dispatchOrFail`
+         * / `self.dispatch` / `self.dispatchOrFail`) would fail with
          * one of the listed tags, the runtime routes to the matching
          * handler instead and the tag drops out of the method's
          * declared error channel. The handler can die, log, no-op —
          * whatever recovery policy the machine wants.
          *
          * Keys match the Service/Factory class's `CaughtTags`
-         * generic exactly, drawn from either the built-in runtime
-         * errors (`"MalformedSpec"`, `"TransitionLimit"`) or any
-         * user-defined `TaggedError`'s `_tag` the handlers can yield.
-         *
-         * Not applied to the Layer's own construction error channel —
-         * failures from the initial state entry (bad `initial` name,
-         * runaway transition chain during `ready`) still bubble up as
-         * Layer errors so bootstrap problems don't get swallowed.
+         * generic exactly — a subset of the `UserE` subclasses'
+         * `_tag` strings. Framework runtime bugs (`MalformedSpec`)
+         * are not catchable here; they always die as defects and
+         * `Effect.catchAllCause` is the only way to intercept them.
          */
         readonly catch: CatchHandlerMap<CaughtTags, UserE>;
       });
@@ -574,10 +547,10 @@ export interface MachineHandle<
 
 /**
  * What a Factory's Layer provides. `spawn` produces a fresh
- * `MachineHandle` per call, scoped to the caller's Scope. Failure
- * channel mirrors `Machine.serviceLayer`'s — the same runtime
- * failure modes (`MalformedSpec` from a bad transition target,
- * `TransitionLimit` from a runaway reentry) apply per instance.
+ * `MachineHandle` per call, scoped to the caller's Scope. The
+ * spawn Effect has an empty error channel — runtime bugs die as
+ * defects, and the per-instance spec is already built when `spawn`
+ * is called.
  */
 export interface MachineFactory<
   States,
@@ -591,7 +564,7 @@ export interface MachineFactory<
     args: Inputs,
   ): Effect.Effect<
     MachineHandle<States, Events, Output, CaughtTags, UserE>,
-    MalformedSpec | TransitionLimit,
+    never,
     Scope.Scope
   >;
 }

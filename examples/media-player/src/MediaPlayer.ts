@@ -101,19 +101,17 @@ export interface PlayerOutput {
 // Service class
 // =============================================================================
 
-// Declare that this machine catches both runtime error tags — the
-// spec's `catch` block below provides handlers for each. Flips
-// `handle.dispatch` and `self.dispatch`'s error channels to `never`
-// so click handlers can just `yield* player.dispatch(...)` without
-// `.pipe(Effect.orDie)` dance.
+// No `UserE` declared — handlers yield only ordinary transitions,
+// so the dispatch error channel is `never`. Click handlers can
+// just `player.dispatch(...)` without wrapping. Runtime bugs
+// (`MalformedSpec`) die as defects and never reach the typed
+// channel.
 export class MediaPlayer extends Machine.Service<
   MediaPlayer,
   PlayerStates,
   PlayerEvents,
   PlayerContext,
-  PlayerOutput,
-  never,
-  "MalformedSpec" | "TransitionLimit"
+  PlayerOutput
 >()("MediaPlayer") {}
 
 // =============================================================================
@@ -138,15 +136,6 @@ export const MediaPlayerLive = Machine.serviceLayer(
     initial: "idle" as const,
     context: emptyContext,
     output: (ctx) => ({ ...ctx }),
-
-    // Programmer-bug catches declared at the class level above.
-    // Both tags surface here — die on either so a bad spec gets
-    // noticed loudly in dev. In production you might log + fall
-    // back to a safe state instead.
-    catch: {
-      MalformedSpec: (e) => Effect.die(e),
-      TransitionLimit: (e) => Effect.die(e),
-    },
 
     // Global fallbacks — fire regardless of current state. The
     // precedence rule is per-state wins, so if a state ever grew its

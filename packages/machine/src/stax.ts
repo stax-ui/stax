@@ -38,7 +38,25 @@ import { Effect, Stream } from "effect";
 
 import { Readable } from "@stax-ui/core";
 
-import type { MachineHandle } from "./types.js";
+import type { MachineHandle, TaggedError } from "./types.js";
+
+/**
+ * Each adapter below takes a `MachineHandle` by its first three
+ * generics only (`States`, `Events`, `Output`) and treats
+ * `CaughtTags` / `UserE` as pass-through. The adapters only touch
+ * the snapshot and subscribe surfaces — not `dispatch` — so the
+ * dispatch error channel's shape doesn't affect them. Fixing the
+ * handle param at a wildcard (`AnyMachineHandle` below) sidesteps
+ * contravariance on `dispatch`'s return type that would otherwise
+ * reject a handle whose dispatch channel the caller widened.
+ */
+type AnyMachineHandle<States, Events, Output> = MachineHandle<
+  States,
+  Events,
+  Output,
+  string,
+  TaggedError
+>;
 
 // =============================================================================
 // Internal helpers
@@ -85,7 +103,7 @@ const readableFromCallback = <A>(
  * `handle.output` + `handle.subscribe`.
  */
 export const outputReadable = <States, Events, Output>(
-  handle: MachineHandle<States, Events, Output>,
+  handle: AnyMachineHandle<States, Events, Output>,
 ): Readable.Readable<Output> =>
   readableFromCallback(
     () => handle.output,
@@ -98,7 +116,7 @@ export const outputReadable = <States, Events, Output>(
  * (by `Object.is`).
  */
 export const fieldReadable = <States, Events, Output, K extends keyof Output>(
-  handle: MachineHandle<States, Events, Output>,
+  handle: AnyMachineHandle<States, Events, Output>,
   key: K,
 ): Readable.Readable<Output[K]> =>
   readableFromCallback(
@@ -111,7 +129,7 @@ export const fieldReadable = <States, Events, Output, K extends keyof Output>(
  * `handle.subscribeState`. Emits on every transition.
  */
 export const stateReadable = <States, Events, Output>(
-  handle: MachineHandle<States, Events, Output>,
+  handle: AnyMachineHandle<States, Events, Output>,
 ): Readable.Readable<keyof States & string> =>
   readableFromCallback(
     () => handle.state(),
@@ -131,7 +149,7 @@ export const inStateReadable = <
   Output,
   K extends keyof States & string,
 >(
-  handle: MachineHandle<States, Events, Output>,
+  handle: AnyMachineHandle<States, Events, Output>,
   name: K,
 ): Readable.Readable<boolean> =>
   readableFromCallback(
@@ -154,7 +172,7 @@ export const canDispatchReadable = <
   Output,
   K extends keyof Events & string,
 >(
-  handle: MachineHandle<States, Events, Output>,
+  handle: AnyMachineHandle<States, Events, Output>,
   event: K,
 ): Readable.Readable<boolean> =>
   readableFromCallback(
@@ -174,7 +192,7 @@ export const canDispatchReadable = <
  * through `Stream.changesWith` with your own equality.
  */
 export const availableEventsReadable = <States, Events, Output>(
-  handle: MachineHandle<States, Events, Output>,
+  handle: AnyMachineHandle<States, Events, Output>,
 ): Readable.Readable<ReadonlyArray<keyof Events & string>> =>
   readableFromCallback(
     () => handle.availableEvents(),

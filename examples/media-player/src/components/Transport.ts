@@ -34,8 +34,8 @@ export const Transport = () =>
 
     // Click handlers run outside the Effect context, so `player` is
     // captured in closure (not re-yielded). No error-channel pipe
-    // needed — the machine's `catch` config narrowed dispatch's
-    // return type to `Effect<void, never>`.
+    // needed — the machine declares no `UserE`, so dispatch's
+    // return type is `Effect<void, never>` by construction.
     const dispatch = (event: "PLAY" | "PAUSE" | "STOP") =>
       player.dispatch(event);
 
