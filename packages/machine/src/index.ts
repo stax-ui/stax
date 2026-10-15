@@ -243,6 +243,7 @@ import {
   TransitionLimit,
   type MachineFactory,
   type MachineHandle,
+  type RuntimeErrorTag,
   type Spec,
 } from "./types.js";
 
@@ -282,6 +283,7 @@ declare const _context: unique symbol;
 declare const _output: unique symbol;
 declare const _inputs: unique symbol;
 declare const _deps: unique symbol;
+declare const _caught: unique symbol;
 
 /**
  * Marker interface held on the Service base class. Extends
@@ -296,10 +298,11 @@ export interface ServiceClass<
   Context,
   Output,
   R = never,
+  CaughtTags extends RuntimeErrorTag = never,
 > extends ContextModule.TagClass<
   Self,
   string,
-  MachineHandle<States, Events, Output>
+  MachineHandle<States, Events, Output, CaughtTags>
 > {
   // Phantom markers so the class carries the machine's generics —
   // used by serviceLayer to recover them. Optional so `class Foo
@@ -310,6 +313,7 @@ export interface ServiceClass<
   readonly [_context]?: Context;
   readonly [_output]?: Output;
   readonly [_deps]?: R;
+  readonly [_caught]?: CaughtTags;
   Default?: Layer.Layer<Self, MalformedSpec | TransitionLimit, R>;
 }
 
@@ -327,10 +331,11 @@ export interface FactoryClass<
   Context,
   Output,
   R = never,
+  CaughtTags extends RuntimeErrorTag = never,
 > extends ContextModule.TagClass<
   Self,
   string,
-  MachineFactory<States, Events, Inputs, Output>
+  MachineFactory<States, Events, Inputs, Output, CaughtTags>
 > {
   readonly [_states]?: States;
   readonly [_events]?: Events;
@@ -338,6 +343,7 @@ export interface FactoryClass<
   readonly [_context]?: Context;
   readonly [_output]?: Output;
   readonly [_deps]?: R;
+  readonly [_caught]?: CaughtTags;
   Default?: Layer.Layer<Self, never, R>;
 }
 
@@ -359,11 +365,21 @@ export interface FactoryClass<
  * `yield* MyMachine` produces the handle.
  */
 export const Service =
-  <Self, States, Events, Context, Output, R = never>() =>
-  (name: string): ServiceClass<Self, States, Events, Context, Output, R> => {
+  <
+    Self,
+    States,
+    Events,
+    Context,
+    Output,
+    R = never,
+    CaughtTags extends RuntimeErrorTag = never,
+  >() =>
+  (
+    name: string,
+  ): ServiceClass<Self, States, Events, Context, Output, R, CaughtTags> => {
     class ServiceBase extends Context.Tag(name)<
       Self,
-      MachineHandle<States, Events, Output>
+      MachineHandle<States, Events, Output, CaughtTags>
     >() {}
     return ServiceBase as unknown as ServiceClass<
       Self,
@@ -371,7 +387,8 @@ export const Service =
       Events,
       Context,
       Output,
-      R
+      R,
+      CaughtTags
     >;
   };
 
@@ -381,13 +398,31 @@ export const Service =
  * to produce a fresh instance per parent.
  */
 export const Factory =
-  <Self, States, Events, Inputs, Context, Output, R = never>() =>
+  <
+    Self,
+    States,
+    Events,
+    Inputs,
+    Context,
+    Output,
+    R = never,
+    CaughtTags extends RuntimeErrorTag = never,
+  >() =>
   (
     name: string,
-  ): FactoryClass<Self, States, Events, Inputs, Context, Output, R> => {
+  ): FactoryClass<
+    Self,
+    States,
+    Events,
+    Inputs,
+    Context,
+    Output,
+    R,
+    CaughtTags
+  > => {
     class FactoryBase extends Context.Tag(name)<
       Self,
-      MachineFactory<States, Events, Inputs, Output>
+      MachineFactory<States, Events, Inputs, Output, CaughtTags>
     >() {}
     return FactoryBase as unknown as FactoryClass<
       Self,
@@ -396,7 +431,8 @@ export const Factory =
       Inputs,
       Context,
       Output,
-      R
+      R,
+      CaughtTags
     >;
   };
 
@@ -435,17 +471,37 @@ export const Factory =
  * );
  * ```
  */
-export const serviceLayer = <Self, States, Events, Context, Output, R>(
-  cls: ServiceClass<Self, States, Events, Context, Output, R>,
-  builder: Effect.Effect<Spec<States, Events, Context, Output>, never, R>,
+export const serviceLayer = <
+  Self,
+  States,
+  Events,
+  Context,
+  Output,
+  R,
+  CaughtTags extends RuntimeErrorTag = never,
+>(
+  cls: ServiceClass<Self, States, Events, Context, Output, R, CaughtTags>,
+  builder: Effect.Effect<
+    Spec<
+      States,
+      Events,
+      Context,
+      Output,
+      MalformedSpec | TransitionLimit,
+      never,
+      CaughtTags
+    >,
+    never,
+    R
+  >,
 ): Layer.Layer<Self, MalformedSpec | TransitionLimit, R> => {
   const tag = cls as unknown as Context.Tag<
     Self,
-    MachineHandle<States, Events, Output>
+    MachineHandle<States, Events, Output, CaughtTags>
   >;
   return Layer.scoped(
     tag,
-    createRuntime<States, Events, Context, Output, R>(builder),
+    createRuntime<States, Events, Context, Output, R, CaughtTags>(builder),
   );
 };
 
@@ -483,14 +539,40 @@ export const serviceLayer = <Self, States, Events, Context, Output, R>(
  * );
  * ```
  */
-export const factoryLayer = <Self, States, Events, Inputs, Context, Output, R>(
-  cls: FactoryClass<Self, States, Events, Inputs, Context, Output, R>,
+export const factoryLayer = <
+  Self,
+  States,
+  Events,
+  Inputs,
+  Context,
+  Output,
+  R,
+  CaughtTags extends RuntimeErrorTag = never,
+>(
+  cls: FactoryClass<
+    Self,
+    States,
+    Events,
+    Inputs,
+    Context,
+    Output,
+    R,
+    CaughtTags
+  >,
   builder: Effect.Effect<
     {
       spawn: (
         args: Inputs,
       ) => Effect.Effect<
-        Spec<States, Events, Context, Output>,
+        Spec<
+          States,
+          Events,
+          Context,
+          Output,
+          MalformedSpec | TransitionLimit,
+          never,
+          CaughtTags
+        >,
         never,
         Scope.Scope
       >;
@@ -501,11 +583,19 @@ export const factoryLayer = <Self, States, Events, Inputs, Context, Output, R>(
 ): Layer.Layer<Self, never, R> => {
   const tag = cls as unknown as Context.Tag<
     Self,
-    MachineFactory<States, Events, Inputs, Output>
+    MachineFactory<States, Events, Inputs, Output, CaughtTags>
   >;
   return Layer.effect(
     tag,
-    createFactoryRuntime<States, Events, Inputs, Context, Output, R>(builder),
+    createFactoryRuntime<
+      States,
+      Events,
+      Inputs,
+      Context,
+      Output,
+      R,
+      CaughtTags
+    >(builder),
   );
 };
 

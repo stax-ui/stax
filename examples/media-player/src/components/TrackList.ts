@@ -31,8 +31,7 @@ const TrackRow = (track: Track) =>
             c ? "btn-primary" : "btn-ghost",
           ].join(" "),
         ),
-        onClick: () =>
-          player.dispatch("LOAD", { trackId: track.id }).pipe(Effect.orDie),
+        onClick: () => player.dispatch("LOAD", { trackId: track.id }),
       },
       $.div(
         { class: "flex flex-col items-start" },

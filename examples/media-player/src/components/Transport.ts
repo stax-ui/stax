@@ -33,11 +33,11 @@ export const Transport = () =>
     const canStop = MachineReadable.canDispatch(player, "STOP");
 
     // Click handlers run outside the Effect context, so `player` is
-    // captured in closure (not re-yielded). orDie because the only
-    // failures `dispatch` can raise are MalformedSpec / TransitionLimit
-    // — programmer bugs that shouldn't be caught at a button handler.
+    // captured in closure (not re-yielded). No error-channel pipe
+    // needed — the machine's `catch` config narrowed dispatch's
+    // return type to `Effect<void, never>`.
     const dispatch = (event: "PLAY" | "PAUSE" | "STOP") =>
-      player.dispatch(event).pipe(Effect.orDie);
+      player.dispatch(event);
 
     return yield* $.div(
       { class: "card bg-base-100 shadow-xl" },

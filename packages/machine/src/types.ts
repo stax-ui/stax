@@ -110,6 +110,54 @@ export class MachineUninitialized extends Data.TaggedError(
 }> {}
 
 // =============================================================================
+// Runtime error catching
+// =============================================================================
+
+/**
+ * Short tag names for the runtime errors a spec's `catch` field can
+ * handle. Suffix of each error class's `_tag`
+ * (`"@stax-ui/machine/<Name>"`) so the runtime can route each
+ * entry to `Effect.catchTag` with the full name.
+ */
+export type RuntimeErrorTag = "MalformedSpec" | "TransitionLimit";
+
+/**
+ * Map from short tag name to the matching error class.
+ */
+export type RuntimeErrorClass<T extends RuntimeErrorTag> =
+  T extends "MalformedSpec"
+    ? MalformedSpec
+    : T extends "TransitionLimit"
+      ? TransitionLimit
+      : never;
+
+/**
+ * Union of error-class instances for a set of caught tags. Used to
+ * `Exclude` them from `dispatch`'s error channel at the type level.
+ */
+export type RuntimeErrorsForTags<Tags extends RuntimeErrorTag> = {
+  [T in Tags]: RuntimeErrorClass<T>;
+}[Tags];
+
+/**
+ * Spec-level `catch` block — one handler per `RuntimeErrorTag`. When
+ * a tag is present here, the runtime catches that error at the
+ * dispatch surfaces (`handle.dispatch` / `handle.dispatchOrFail` /
+ * `self.dispatch` / `self.dispatchOrFail`), runs the handler, and
+ * narrows the tag out of the method's declared error channel.
+ *
+ * Keys are the subset of `RuntimeErrorTag` the user declared the
+ * machine would catch (via the Service/Factory class's
+ * `CaughtTags` generic). Each value is
+ * `(e: ErrorClass) => Effect<void>` — handle the error however you
+ * like (die, log, no-op), the runtime treats the dispatch as
+ * having completed successfully.
+ */
+export type CatchHandlerMap<Tags extends RuntimeErrorTag> = {
+  readonly [T in Tags]: (e: RuntimeErrorClass<T>) => Effect.Effect<void>;
+};
+
+// =============================================================================
 // Generic helpers
 // =============================================================================
 
@@ -121,6 +169,15 @@ export class MachineUninitialized extends Data.TaggedError(
 export type AnyTransition<States> = {
   [K in keyof States]: Transition<K & string, States[K]>;
 }[keyof States];
+
+/**
+ * `MalformedSpec | TransitionLimit` with any tags listed in
+ * `CaughtTags` excluded. Shared helper for the dispatch surfaces.
+ */
+export type UncaughtRuntimeErrors<CaughtTags extends RuntimeErrorTag> = Exclude<
+  MalformedSpec | TransitionLimit,
+  RuntimeErrorsForTags<CaughtTags>
+>;
 
 /**
  * `[payload?]` tuple if a state's payload has no keys (`{}`),
@@ -142,7 +199,12 @@ export type PayloadArg<T> = [T] extends [Record<string, never>]
  * generics so `self.transition("name", payload)` narrows against
  * the state map and `self.assign(patch)` checks against Context.
  */
-export interface MachineSelf<States, Events, Context> {
+export interface MachineSelf<
+  States,
+  Events,
+  Context,
+  CaughtTags extends RuntimeErrorTag = never,
+> {
   /**
    * Current committed context. Plain getter — no yield. Always
    * safe: `self` is only reachable from callbacks the runtime
@@ -167,7 +229,7 @@ export interface MachineSelf<States, Events, Context> {
   dispatch<K extends keyof Events & string>(
     event: K,
     ...args: PayloadArg<Events[K]>
-  ): Effect.Effect<void, MalformedSpec | TransitionLimit>;
+  ): Effect.Effect<void, UncaughtRuntimeErrors<CaughtTags>>;
 
   /**
    * Same as `dispatch`, but fails with `UnhandledEvent` when the
@@ -178,7 +240,7 @@ export interface MachineSelf<States, Events, Context> {
   dispatchOrFail<K extends keyof Events & string>(
     event: K,
     ...args: PayloadArg<Events[K]>
-  ): Effect.Effect<void, UnhandledEvent | MalformedSpec | TransitionLimit>;
+  ): Effect.Effect<void, UnhandledEvent | UncaughtRuntimeErrors<CaughtTags>>;
 
   /**
    * Construct a transition to `name` with `payload`. Return the
@@ -286,8 +348,9 @@ export type StateFn<
   Context,
   E = SelfMethodErrors,
   R = never,
+  CaughtTags extends RuntimeErrorTag = never,
 > = (
-  self: MachineSelf<States, Events, Context>,
+  self: MachineSelf<States, Events, Context, CaughtTags>,
   payload: States[K],
 ) => Effect.Effect<
   HandlerMap<States, Events, E, R> | AnyTransition<States> | void,
@@ -308,13 +371,19 @@ export type StateFn<
  * machine's parent scope, for machine-lifetime setup (cross-machine
  * mirror subscriptions, background workers, etc.).
  */
-export interface Spec<
+/**
+ * Core spec fields shared by every machine. Extracted so the
+ * `catch` requirement can be added conditionally based on
+ * `CaughtTags`.
+ */
+interface SpecBase<
   States,
   Events,
   Context,
   Output,
-  E = SelfMethodErrors,
-  R = never,
+  E,
+  R,
+  CaughtTags extends RuntimeErrorTag,
 > {
   readonly initial: keyof States & string;
   readonly context: Context;
@@ -340,12 +409,12 @@ export interface Spec<
    */
   readonly on?: {
     [K in keyof Events]?: (
-      self: MachineSelf<States, Events, Context>,
+      self: MachineSelf<States, Events, Context, CaughtTags>,
       payload: Events[K],
     ) => Effect.Effect<AnyTransition<States> | void, E, R>;
   };
   readonly states: {
-    [K in keyof States]: StateFn<K, States, Events, Context, E, R>;
+    [K in keyof States]: StateFn<K, States, Events, Context, E, R, CaughtTags>;
   };
   /**
    * Machine-lifetime setup — runs once, immediately after the
@@ -356,9 +425,56 @@ export interface Spec<
    * `addFinalizer`) lives for the machine's entire lifetime.
    */
   readonly ready?: (
-    self: MachineSelf<States, Events, Context>,
+    self: MachineSelf<States, Events, Context, CaughtTags>,
   ) => Effect.Effect<void, E, R | Scope.Scope>;
 }
+
+/**
+ * The object shape a builder returns. `context` is required (initial
+ * context); `output` projects context to the public shape; `states`
+ * maps every state name to its state fn; `on` is optional handlers
+ * that fire in every state (unless a state overrides); `ready` is
+ * an optional post-init hook — runs once with `self`, in the
+ * machine's parent scope, for machine-lifetime setup (cross-machine
+ * mirror subscriptions, background workers, etc.).
+ *
+ * When `CaughtTags` is non-empty (set at the Service/Factory class
+ * level), the spec must also declare a `catch` block with a handler
+ * per tag — see `catch` doc on the Catch branch below.
+ */
+export type Spec<
+  States,
+  Events,
+  Context,
+  Output,
+  E = SelfMethodErrors,
+  R = never,
+  CaughtTags extends RuntimeErrorTag = never,
+> = SpecBase<States, Events, Context, Output, E, R, CaughtTags> &
+  ([CaughtTags] extends [never]
+    ? {}
+    : {
+        /**
+         * Spec-level catch handlers, one per `RuntimeErrorTag`. When a
+         * dispatch surface (`handle.dispatch` / `handle.dispatchOrFail`
+         * / `self.dispatch` / `self.dispatchOrFail`) would fail with
+         * one of the listed tags, the runtime routes to the matching
+         * handler instead and the tag drops out of the method's
+         * declared error channel. The handler can die, log, no-op —
+         * whatever recovery policy the machine wants.
+         *
+         * Keys must match the Service/Factory class's `CaughtTags`
+         * generic exactly: declaring `"MalformedSpec" |
+         * "TransitionLimit"` at the class level means both keys must
+         * be present here.
+         *
+         * Not applied to the Layer's own construction error channel —
+         * failures from the initial state entry (bad `initial` name,
+         * runaway transition chain during `ready`) still bubble up as
+         * Layer errors so bootstrap problems don't get swallowed.
+         */
+        readonly catch: CatchHandlerMap<CaughtTags>;
+      });
 
 // =============================================================================
 // Consumer-facing handle
@@ -372,7 +488,12 @@ export interface Spec<
  * live alongside the callback-based ones for Effect-using
  * consumers.
  */
-export interface MachineHandle<States, Events, Output> {
+export interface MachineHandle<
+  States,
+  Events,
+  Output,
+  CaughtTags extends RuntimeErrorTag = never,
+> {
   // -------- Snapshots --------
   snapshot(): Output;
   state(): keyof States & string;
@@ -430,11 +551,11 @@ export interface MachineHandle<States, Events, Output> {
   dispatch<K extends keyof Events & string>(
     event: K,
     ...args: PayloadArg<Events[K]>
-  ): Effect.Effect<void, MalformedSpec | TransitionLimit>;
+  ): Effect.Effect<void, UncaughtRuntimeErrors<CaughtTags>>;
   dispatchOrFail<K extends keyof Events & string>(
     event: K,
     ...args: PayloadArg<Events[K]>
-  ): Effect.Effect<void, UnhandledEvent | MalformedSpec | TransitionLimit>;
+  ): Effect.Effect<void, UnhandledEvent | UncaughtRuntimeErrors<CaughtTags>>;
 
   // -------- External coordination --------
   /** Suspends until the machine enters `name`. */
@@ -448,11 +569,17 @@ export interface MachineHandle<States, Events, Output> {
  * failure modes (`MalformedSpec` from a bad transition target,
  * `TransitionLimit` from a runaway reentry) apply per instance.
  */
-export interface MachineFactory<States, Events, Inputs, Output> {
+export interface MachineFactory<
+  States,
+  Events,
+  Inputs,
+  Output,
+  CaughtTags extends RuntimeErrorTag = never,
+> {
   spawn(
     args: Inputs,
   ): Effect.Effect<
-    MachineHandle<States, Events, Output>,
+    MachineHandle<States, Events, Output, CaughtTags>,
     MalformedSpec | TransitionLimit,
     Scope.Scope
   >;

@@ -1120,3 +1120,173 @@ describe("Machine runtime — global `on:` edge cases", () => {
     );
   });
 });
+
+// -----------------------------------------------------------------------------
+// Spec-level `catch` — routes runtime errors away from the
+// dispatch surfaces and into user-supplied handlers, narrowing the
+// error channel on both `handle.dispatch` and `self.dispatch`.
+// -----------------------------------------------------------------------------
+
+describe("Machine runtime — spec-level `catch`", () => {
+  it("`catch.MalformedSpec` fires on dispatch when a handler returns a bogus transition", () => {
+    // Same shape as the earlier MalformedSpec test, but with a
+    // spec-level catch that routes the error to a handler instead
+    // of surfacing it on dispatch.
+    interface BadStates {
+      good: {};
+    }
+    class Bad extends Machine.Service<
+      Bad,
+      BadStates,
+      { GO_BAD: {} },
+      {},
+      {},
+      never,
+      "MalformedSpec"
+    >()("Bad") {}
+
+    let caught: MalformedSpec | null = null;
+    const layer = Machine.serviceLayer(
+      Bad,
+      Effect.succeed({
+        initial: "good" as const,
+        context: {},
+        output: () => ({}),
+        catch: {
+          MalformedSpec: (e) =>
+            Effect.sync(() => {
+              caught = e;
+            }),
+        },
+        states: {
+          good: (self) =>
+            Effect.succeed({
+              GO_BAD: () => self.transition("bogus" as never, {} as never),
+            }),
+        },
+      }),
+    );
+
+    return runScoped(
+      Effect.gen(function* () {
+        const machine = yield* Bad;
+        // The dispatch Effect's error channel narrowed to `never`
+        // via the Service class's `"MalformedSpec"` generic.
+        // Compile-time: no `.pipe(Effect.catchAll(...))` needed.
+        yield* machine.dispatch("GO_BAD");
+        expect(caught).not.toBeNull();
+        expect(caught).toBeInstanceOf(MalformedSpec);
+      }).pipe(Effect.provide(layer)),
+    );
+  });
+
+  it("`catch.TransitionLimit` fires on dispatch when a transition chain runs away", () => {
+    // `stable` is normal; its START handler kicks off a two-task-
+    // state ping-pong (ping ↔ pong) that recurses past
+    // REENTRY_DEPTH_CAP via `enterStateRec`.
+    interface LoopStates {
+      stable: {};
+      ping: {};
+      pong: {};
+    }
+    interface LoopEvents {
+      START: {};
+    }
+    class Loop extends Machine.Service<
+      Loop,
+      LoopStates,
+      LoopEvents,
+      {},
+      {},
+      never,
+      "TransitionLimit"
+    >()("Loop") {}
+
+    let caught: TransitionLimit | null = null;
+    const layer = Machine.serviceLayer(
+      Loop,
+      Effect.succeed({
+        initial: "stable" as const,
+        context: {},
+        output: () => ({}),
+        catch: {
+          TransitionLimit: (e) =>
+            Effect.sync(() => {
+              caught = e;
+            }),
+        },
+        states: {
+          stable: (self) =>
+            Effect.succeed({
+              START: () => self.transition("ping"),
+            }),
+          ping: (self) => self.transition("pong"),
+          pong: (self) => self.transition("ping"),
+        },
+      }),
+    );
+
+    return runScoped(
+      Effect.gen(function* () {
+        const machine = yield* Loop;
+        yield* machine.dispatch("START");
+        expect(caught).not.toBeNull();
+        expect(caught).toBeInstanceOf(TransitionLimit);
+      }).pipe(Effect.provide(layer)),
+    );
+  });
+
+  it("declaring multiple tags requires providing all of them in `catch`", () => {
+    // Narrows both error types out of dispatch's channel. Compiles
+    // because we provide both handlers; TypeScript would reject at
+    // compile time if we only declared "MalformedSpec" at the
+    // class level and tried to catch TransitionLimit here (or
+    // vice versa).
+    interface S {
+      good: {};
+    }
+    class Both extends Machine.Service<
+      Both,
+      S,
+      { GO: {} },
+      {},
+      {},
+      never,
+      "MalformedSpec" | "TransitionLimit"
+    >()("Both") {}
+
+    let seen: string[] = [];
+    const layer = Machine.serviceLayer(
+      Both,
+      Effect.succeed({
+        initial: "good" as const,
+        context: {},
+        output: () => ({}),
+        catch: {
+          MalformedSpec: () =>
+            Effect.sync(() => {
+              seen.push("MalformedSpec");
+            }),
+          TransitionLimit: () =>
+            Effect.sync(() => {
+              seen.push("TransitionLimit");
+            }),
+        },
+        states: {
+          good: (self) =>
+            Effect.succeed({
+              GO: () => self.transition("bogus" as never, {} as never),
+            }),
+        },
+      }),
+    );
+
+    return runScoped(
+      Effect.gen(function* () {
+        const machine = yield* Both;
+        yield* machine.dispatch("GO");
+        expect(seen).toEqual(["MalformedSpec"]);
+      }).pipe(Effect.provide(layer)),
+    );
+  });
+});

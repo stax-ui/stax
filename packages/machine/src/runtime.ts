@@ -38,6 +38,7 @@ import {
   type MachineFactory,
   type MachineHandle,
   type MachineSelf,
+  type RuntimeErrorTag,
   type Spec,
   type Transition,
 } from "./types.js";
@@ -89,6 +90,53 @@ const shallowEqual = (a: unknown, b: unknown): boolean => {
 
 /** Max chained transitions in a single event-processing cycle. */
 const REENTRY_DEPTH_CAP = 32;
+
+/**
+ * Wrap an Effect<void, E> with `Effect.catchTag` for each handler
+ * the spec declared under `catch`. Each handler takes the matched
+ * error and returns `Effect<void>` — once applied, that tag drops
+ * out of the Effect's error channel. Called at every dispatch
+ * surface (`handle.dispatch` / `handle.dispatchOrFail` /
+ * `self.dispatch` / `self.dispatchOrFail`) so the catch policy
+ * applies uniformly to any path that could surface a runtime error.
+ *
+ * The runtime impl stays type-opaque — the handle/self interfaces
+ * carry the `CaughtTags` generic, which does the narrowing at the
+ * boundary. Here we just do the Effect-level wrapping.
+ */
+const applyCatches = <E>(
+  spec: Spec<unknown, unknown, unknown, unknown, unknown, unknown, never>,
+  effect: Effect.Effect<void, E>,
+): Effect.Effect<void, E> => {
+  // The `catch` field is only present on specs whose CaughtTags is
+  // non-empty — safe to read via `in` and treat as optional here
+  // because the type signature using `never` means TS can't see it.
+  const catches = (
+    spec as unknown as {
+      catch?: Partial<
+        Record<RuntimeErrorTag, (e: unknown) => Effect.Effect<void>>
+      >;
+    }
+  ).catch;
+  if (!catches) return effect;
+  // Build the `Effect.catchTags` handler map, keyed by the full
+  // `_tag` string each error class carries. `catchTags` applies all
+  // handlers in one pass and narrows the error channel for each
+  // matched tag. The runtime impl is intentionally type-opaque; the
+  // handle/self interface types do the actual narrowing at the
+  // consumer boundary via `UncaughtRuntimeErrors<CaughtTags>`.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const handlerMap: Record<string, (e: any) => Effect.Effect<void>> = {};
+  for (const tag of Object.keys(catches) as RuntimeErrorTag[]) {
+    const handler = catches[tag];
+    if (handler) {
+      handlerMap[`@stax-ui/machine/${tag}`] = handler;
+    }
+  }
+  return (
+    effect as unknown as Effect.Effect<void, { readonly _tag: string }>
+  ).pipe(Effect.catchTags(handlerMap)) as Effect.Effect<void, E>;
+};
 
 // =============================================================================
 // Runtime state
@@ -148,10 +196,29 @@ interface Runtime<States, Events, Context, Output> {
  * `self`-touching (state fns, handlers, `ready`) receives `self`
  * from the runtime at invocation time, post-init.
  */
-export const createRuntime = <States, Events, Context, Output, R>(
-  builder: Effect.Effect<Spec<States, Events, Context, Output>, never, R>,
+export const createRuntime = <
+  States,
+  Events,
+  Context,
+  Output,
+  R,
+  CaughtTags extends RuntimeErrorTag = never,
+>(
+  builder: Effect.Effect<
+    Spec<
+      States,
+      Events,
+      Context,
+      Output,
+      MalformedSpec | TransitionLimit,
+      never,
+      CaughtTags
+    >,
+    never,
+    R
+  >,
 ): Effect.Effect<
-  MachineHandle<States, Events, Output>,
+  MachineHandle<States, Events, Output, CaughtTags>,
   MalformedSpec | TransitionLimit,
   R | Scope.Scope
 > =>
@@ -183,13 +250,22 @@ export const createFactoryRuntime = <
   Context,
   Output,
   R,
+  CaughtTags extends RuntimeErrorTag = never,
 >(
   builder: Effect.Effect<
     {
       spawn: (
         args: Inputs,
       ) => Effect.Effect<
-        Spec<States, Events, Context, Output>,
+        Spec<
+          States,
+          Events,
+          Context,
+          Output,
+          MalformedSpec | TransitionLimit,
+          never,
+          CaughtTags
+        >,
         never,
         Scope.Scope
       >;
@@ -197,7 +273,11 @@ export const createFactoryRuntime = <
     never,
     R
   >,
-): Effect.Effect<MachineFactory<States, Events, Inputs, Output>, never, R> =>
+): Effect.Effect<
+  MachineFactory<States, Events, Inputs, Output, CaughtTags>,
+  never,
+  R
+> =>
   Effect.gen(function* () {
     const { spawn } = yield* builder;
     return {
@@ -227,11 +307,25 @@ export const createFactoryRuntime = <
  * instance should be tied to — for Service, that's the layer's
  * scope; for Factory, that's the caller's scope at `.spawn` time.
  */
-const instantiateMachine = <States, Events, Context, Output>(
-  spec: Spec<States, Events, Context, Output>,
+const instantiateMachine = <
+  States,
+  Events,
+  Context,
+  Output,
+  CaughtTags extends RuntimeErrorTag,
+>(
+  spec: Spec<
+    States,
+    Events,
+    Context,
+    Output,
+    MalformedSpec | TransitionLimit,
+    never,
+    CaughtTags
+  >,
   parentScope: Scope.Scope,
 ): Effect.Effect<
-  MachineHandle<States, Events, Output>,
+  MachineHandle<States, Events, Output, CaughtTags>,
   MalformedSpec | TransitionLimit
 > =>
   Effect.gen(function* () {
@@ -271,9 +365,31 @@ const instantiateMachine = <States, Events, Context, Output>(
       },
       assign: (patchOrFn: unknown) => applyAssign(runtime, patchOrFn),
       dispatch: (event: string, ...args: [] | [unknown]) =>
-        enqueue(runtime, event, args[0]),
+        applyCatches(
+          runtime.spec as unknown as Spec<
+            unknown,
+            unknown,
+            unknown,
+            unknown,
+            unknown,
+            unknown,
+            never
+          >,
+          enqueue(runtime, event, args[0]),
+        ),
       dispatchOrFail: (event: string, ...args: [] | [unknown]) =>
-        enqueue(runtime, event, args[0], "fail"),
+        applyCatches(
+          runtime.spec as unknown as Spec<
+            unknown,
+            unknown,
+            unknown,
+            unknown,
+            unknown,
+            unknown,
+            never
+          >,
+          enqueue(runtime, event, args[0], "fail"),
+        ),
       transition: (name: string, ...args: [] | [unknown]) =>
         Effect.succeed({
           [TransitionTypeId]: TransitionTypeId,
@@ -930,9 +1046,31 @@ const buildHandle = <States, Events, Context, Output>(
       ),
 
     dispatch: (event: string, ...args: [] | [unknown]) =>
-      enqueue(runtime, event, args[0]),
+      applyCatches(
+        runtime.spec as unknown as Spec<
+          unknown,
+          unknown,
+          unknown,
+          unknown,
+          unknown,
+          unknown,
+          never
+        >,
+        enqueue(runtime, event, args[0]),
+      ),
     dispatchOrFail: (event: string, ...args: [] | [unknown]) =>
-      enqueue(runtime, event, args[0], "fail"),
+      applyCatches(
+        runtime.spec as unknown as Spec<
+          unknown,
+          unknown,
+          unknown,
+          unknown,
+          unknown,
+          unknown,
+          never
+        >,
+        enqueue(runtime, event, args[0], "fail"),
+      ),
 
     // Suspend until the machine enters `name`. Short-circuits if we're
     // already there (otherwise consumers of a settle-detector would
