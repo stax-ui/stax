@@ -5,7 +5,7 @@
  * end-to-end.
  */
 
-import { Cause, Effect, Exit, Option, Scope } from "effect";
+import { Cause, Data, Effect, Exit, Option, Scope } from "effect";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -1286,6 +1286,130 @@ describe("Machine runtime — spec-level `catch`", () => {
         const machine = yield* Both;
         yield* machine.dispatch("GO");
         expect(seen).toEqual(["MalformedSpec"]);
+      }).pipe(Effect.provide(layer)),
+    );
+  });
+
+  it("absorbs a user-defined `TaggedError` yielded from a handler", () => {
+    // Opening the `UserE` slot lets a handler yield its own
+    // tagged error; declaring the tag at the class level and
+    // providing a catch handler for it narrows the error out of
+    // the dispatch channel at compile time and runtime alike.
+    class DbError extends Data.TaggedError("DbError")<{
+      readonly cause: string;
+    }> {}
+    interface S {
+      ready: {};
+    }
+    class WithUserError extends Machine.Service<
+      WithUserError,
+      S,
+      { WRITE: {} },
+      {},
+      {},
+      never,
+      "DbError",
+      DbError
+    >()("WithUserError") {}
+
+    let caught: DbError | null = null;
+    const layer = Machine.serviceLayer(
+      WithUserError,
+      Effect.succeed({
+        initial: "ready" as const,
+        context: {},
+        output: () => ({}),
+        catch: {
+          DbError: (e) =>
+            Effect.sync(() => {
+              caught = e;
+            }),
+        },
+        states: {
+          ready: () =>
+            Effect.succeed({
+              WRITE: () =>
+                Effect.gen(function* () {
+                  return yield* new DbError({ cause: "simulated" });
+                }),
+            }),
+        },
+      }),
+    );
+
+    return runScoped(
+      Effect.gen(function* () {
+        const machine = yield* WithUserError;
+        // Compile-time: dispatch's error channel narrowed to `never`
+        // via `CaughtTags = "DbError"`. No `.pipe(Effect.catchAll)`
+        // needed around the call.
+        yield* machine.dispatch("WRITE");
+        expect(caught).not.toBeNull();
+        expect(caught).toBeInstanceOf(DbError);
+        expect(caught?.cause).toBe("simulated");
+      }).pipe(Effect.provide(layer)),
+    );
+  });
+
+  it("mixes user and runtime tags in a single `catch` block", () => {
+    // Declaring both the built-in runtime tag and a user-defined
+    // one at the class level requires catch handlers for each; the
+    // runtime routes each incoming error to the right handler via
+    // `Effect.catchTags` matching on `_tag`.
+    class ValidationError extends Data.TaggedError("ValidationError")<{
+      readonly field: string;
+    }> {}
+    interface S {
+      ok: {};
+    }
+    class Mixed extends Machine.Service<
+      Mixed,
+      S,
+      { BAD_TRANSITION: {}; BAD_INPUT: {} },
+      {},
+      {},
+      never,
+      "MalformedSpec" | "ValidationError",
+      ValidationError
+    >()("Mixed") {}
+
+    const seen: string[] = [];
+    const layer = Machine.serviceLayer(
+      Mixed,
+      Effect.succeed({
+        initial: "ok" as const,
+        context: {},
+        output: () => ({}),
+        catch: {
+          MalformedSpec: () =>
+            Effect.sync(() => {
+              seen.push("MalformedSpec");
+            }),
+          ValidationError: (e) =>
+            Effect.sync(() => {
+              seen.push(`ValidationError:${e.field}`);
+            }),
+        },
+        states: {
+          ok: (self) =>
+            Effect.succeed({
+              BAD_TRANSITION: () =>
+                self.transition("nope" as never, {} as never),
+              BAD_INPUT: () =>
+                Effect.gen(function* () {
+                  return yield* new ValidationError({ field: "email" });
+                }),
+            }),
+        },
+      }),
+    );
+
+    return runScoped(
+      Effect.gen(function* () {
+        const machine = yield* Mixed;
+        yield* machine.dispatch("BAD_INPUT");
+        yield* machine.dispatch("BAD_TRANSITION");
+        expect(seen).toEqual(["ValidationError:email", "MalformedSpec"]);
       }).pipe(Effect.provide(layer)),
     );
   });

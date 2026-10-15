@@ -38,8 +38,8 @@ import {
   type MachineFactory,
   type MachineHandle,
   type MachineSelf,
-  type RuntimeErrorTag,
   type Spec,
+  type TaggedError,
   type Transition,
 } from "./types.js";
 
@@ -101,33 +101,25 @@ const REENTRY_DEPTH_CAP = 32;
  *
  * The runtime impl stays type-opaque — the handle/self interfaces
  * carry the `CaughtTags` generic, which does the narrowing at the
- * boundary. Here we just do the Effect-level wrapping, keyed by the
- * full `_tag` string each error class carries at runtime.
+ * boundary. The spec's `catch` keys are the exact `_tag` strings
+ * of the errors they absorb (built-in `"MalformedSpec"` /
+ * `"TransitionLimit"`, or whatever `_tag` the user's own
+ * `TaggedError` subclasses carry), so the map we hand to
+ * `Effect.catchTags` is already keyed correctly — no translation
+ * step needed.
  */
 const applyCatches = <E>(
   catches: RuntimeCatches,
   effect: Effect.Effect<void, E>,
 ): Effect.Effect<void, E> => {
   if (!catches) return effect;
-  const handlerMap: Record<
-    string,
-    (e: { readonly _tag: string }) => Effect.Effect<void>
-  > = {};
-  for (const tag of Object.keys(catches) as RuntimeErrorTag[]) {
-    const handler = catches[tag];
-    if (handler) {
-      handlerMap[`@stax-ui/machine/${tag}`] = handler as (e: {
-        readonly _tag: string;
-      }) => Effect.Effect<void>;
-    }
-  }
   // Open the Effect's error channel to a tagged shape so
   // `Effect.catchTags` can match on `_tag`. The return cast closes
   // it back to the original `E`, minus whatever `catchTags` handled
   // — the handle/self interface types reflect that at the boundary.
   return (
     effect as unknown as Effect.Effect<void, { readonly _tag: string }>
-  ).pipe(Effect.catchTags(handlerMap)) as Effect.Effect<void, E>;
+  ).pipe(Effect.catchTags(catches)) as Effect.Effect<void, E>;
 };
 
 // =============================================================================
@@ -141,20 +133,31 @@ interface QueuedEvent {
 
 /**
  * Runtime-side type for the catch handler map. The user-facing
- * `CatchHandlerMap<CaughtTags>` has concrete tag keys; here we treat
- * every entry as optional with `unknown` payload, so the dispatch
- * sites don't need to know the user's `CaughtTags`.
+ * `CatchHandlerMap<CaughtTags, UserE>` has concrete tag keys with
+ * per-tag payload types; here we treat the map as a plain
+ * `_tag`-keyed record so the dispatch sites don't need to carry
+ * the user's `CaughtTags` / `UserE` generics.
  */
 type RuntimeCatches =
-  | Partial<Record<RuntimeErrorTag, (e: unknown) => Effect.Effect<void>>>
+  | Record<string, (e: { readonly _tag: string }) => Effect.Effect<void>>
   | undefined;
 
 interface Runtime<States, Events, Context, Output> {
-  // Machine identity + spec
-  readonly spec: Spec<States, Events, Context, Output>;
+  // Machine identity + spec. Spec's generics are opaque at the
+  // runtime layer — the type-safe narrowing (CaughtTags, UserE)
+  // happens at the handle/self boundary, not inside the loop. We
+  // widen the E channel here so the spec stored can carry any
+  // user-level tagged errors the handlers may yield.
+  readonly spec: Spec<
+    States,
+    Events,
+    Context,
+    Output,
+    { readonly _tag: string }
+  >;
 
   /**
-   * Pre-extracted spec-level catches, keyed by `RuntimeErrorTag`.
+   * Pre-extracted spec-level catches, keyed by error `_tag`.
    * `undefined` when the spec has no catch block. Pulled off the
    * spec once at `instantiateMachine` so the dispatch surfaces don't
    * re-read the field (or re-assert its runtime type) on every call.
@@ -212,7 +215,8 @@ export const createRuntime = <
   Context,
   Output,
   R,
-  CaughtTags extends RuntimeErrorTag = never,
+  CaughtTags extends string = never,
+  UserE extends TaggedError = never,
 >(
   builder: Effect.Effect<
     Spec<
@@ -220,15 +224,16 @@ export const createRuntime = <
       Events,
       Context,
       Output,
-      MalformedSpec | TransitionLimit,
+      UserE | MalformedSpec | TransitionLimit,
       never,
-      CaughtTags
+      CaughtTags,
+      UserE
     >,
     never,
     R
   >,
 ): Effect.Effect<
-  MachineHandle<States, Events, Output, CaughtTags>,
+  MachineHandle<States, Events, Output, CaughtTags, UserE>,
   MalformedSpec | TransitionLimit,
   R | Scope.Scope
 > =>
@@ -260,7 +265,8 @@ export const createFactoryRuntime = <
   Context,
   Output,
   R,
-  CaughtTags extends RuntimeErrorTag = never,
+  CaughtTags extends string = never,
+  UserE extends TaggedError = never,
 >(
   builder: Effect.Effect<
     {
@@ -272,9 +278,10 @@ export const createFactoryRuntime = <
           Events,
           Context,
           Output,
-          MalformedSpec | TransitionLimit,
+          UserE | MalformedSpec | TransitionLimit,
           never,
-          CaughtTags
+          CaughtTags,
+          UserE
         >,
         never,
         Scope.Scope
@@ -284,7 +291,7 @@ export const createFactoryRuntime = <
     R
   >,
 ): Effect.Effect<
-  MachineFactory<States, Events, Inputs, Output, CaughtTags>,
+  MachineFactory<States, Events, Inputs, Output, CaughtTags, UserE>,
   never,
   R
 > =>
@@ -322,20 +329,22 @@ const instantiateMachine = <
   Events,
   Context,
   Output,
-  CaughtTags extends RuntimeErrorTag,
+  CaughtTags extends string,
+  UserE extends TaggedError,
 >(
   spec: Spec<
     States,
     Events,
     Context,
     Output,
-    MalformedSpec | TransitionLimit,
+    UserE | MalformedSpec | TransitionLimit,
     never,
-    CaughtTags
+    CaughtTags,
+    UserE
   >,
   parentScope: Scope.Scope,
 ): Effect.Effect<
-  MachineHandle<States, Events, Output, CaughtTags>,
+  MachineHandle<States, Events, Output, CaughtTags, UserE>,
   MalformedSpec | TransitionLimit
 > =>
   Effect.gen(function* () {
@@ -348,8 +357,11 @@ const instantiateMachine = <
     // the dispatch sites don't need to re-cast each time.
     const catches = (spec as { readonly catch?: RuntimeCatches }).catch;
 
+    // The runtime struct is generic-free in `CaughtTags`/`UserE` —
+    // those live only at the handle/self boundary — so widen the
+    // stored spec here through the type-opaque Runtime shape.
     const runtime: Runtime<States, Events, Context, Output> = {
-      spec,
+      spec: spec as unknown as Runtime<States, Events, Context, Output>["spec"],
       catches,
       self: null as unknown as MachineSelf<States, Events, Context>,
       currentState: spec.initial,
@@ -448,8 +460,22 @@ const instantiateMachine = <
     // scope so anything scope-registered lives for the machine's
     // whole lifetime.
     if (spec.ready) {
-      const readyEffect = spec.ready(self);
-      yield* readyEffect.pipe(Effect.provideService(Scope.Scope, parentScope));
+      // `self` is stored at the runtime's generic-free shape; the
+      // spec's `ready` is typed with the user's full `CaughtTags` /
+      // `UserE` generics. The runtime treats the two as the same
+      // shape — the generics only narrow the dispatch error
+      // channel, which is irrelevant inside the ready hook here.
+      const readyEffect = spec.ready(
+        self as unknown as Parameters<NonNullable<typeof spec.ready>>[0],
+      );
+      // `ready` may fail with user-defined errors from its handler
+      // body; the runtime treats those as initialization failures
+      // and lets them die rather than threading a user error
+      // channel through the layer-level signature.
+      yield* readyEffect.pipe(
+        Effect.orDie,
+        Effect.provideService(Scope.Scope, parentScope),
+      );
     }
 
     // Enter the initial state synchronously so consumers hold a
@@ -459,7 +485,15 @@ const instantiateMachine = <
     // installed by the time dispatch calls arrive.
     yield* enterState(runtime, spec.initial, {});
 
-    return buildHandle(runtime);
+    // The runtime-side handle is built with the generic-free self
+    // shape; cast at the boundary to the caller's full generics.
+    return buildHandle(runtime) as MachineHandle<
+      States,
+      Events,
+      Output,
+      CaughtTags,
+      UserE
+    >;
   });
 
 // =============================================================================
@@ -519,10 +553,23 @@ const enterStateRec = <States, Events, Context, Output>(
     const stateScope = yield* Scope.make();
     runtime.stateScope = stateScope;
 
-    // Run the state fn in the state's scope, passing self.
-    const result = yield* stateFn(
-      runtime.self,
-      payload as States[keyof States],
+    // Run the state fn in the state's scope, passing self. State
+    // fns are typed with the user's full E channel (`UserE |
+    // SelfMethodErrors`); the runtime treats user-tagged errors as
+    // tagged values that propagate through the drain loop and are
+    // matched at `applyCatches` on the dispatch boundary, so we
+    // narrow the extra channel at the type level here. Behavior
+    // is unchanged — Effect carries the actual error through —
+    // only the static narrowing moves.
+    const result = yield* (
+      stateFn(
+        runtime.self,
+        payload as States[keyof States],
+      ) as unknown as Effect.Effect<
+        unknown,
+        MalformedSpec | TransitionLimit,
+        Scope.Scope
+      >
     ).pipe(Effect.provideService(Scope.Scope, stateScope));
 
     // Interpret the return value.

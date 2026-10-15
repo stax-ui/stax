@@ -293,23 +293,29 @@ listening: (self) =>
   }),
 ```
 
-### Spec-level `catch` — handle runtime errors once, not at every call site
+### Spec-level `catch` — absorb tagged errors once, not at every call site
 
-The runtime can emit two tagged errors from a dispatch surface:
+Two sources of tagged errors can surface on a dispatch:
 
-- **`MalformedSpec`** — a handler returned a `Transition` targeting a state name that doesn't exist. The typed APIs catch this at compile time; a cast-through or `as never` can still land here at runtime.
-- **`TransitionLimit`** — a chain of synchronous transitions blew past the reentry depth cap (32), typically a bug in the state-fn graph.
+- **Runtime errors the machine itself raises:**
+  - **`MalformedSpec`** — a handler returned a `Transition` targeting a state name that doesn't exist. The typed APIs catch this at compile time; a cast-through or `as never` can still land here at runtime.
+  - **`TransitionLimit`** — a chain of synchronous transitions blew past the reentry depth cap (32), typically a bug in the state-fn graph.
+- **User-defined tagged errors** yielded by a handler — anything built with `Data.TaggedError` or any value with a `_tag` string.
 
-Both show up in `handle.dispatch`'s error channel by default:
+By default every one of those surfaces in `handle.dispatch`'s error channel:
 
 ```ts
 handle.dispatch(event)
-// → Effect<void, MalformedSpec | TransitionLimit>
+// → Effect<void, MalformedSpec | TransitionLimit | UserE>
 ```
 
 Which means every call site either pipes `.pipe(Effect.orDie)` (or similar) or has to thread those errors through its own type. For most apps, the right policy is the same everywhere: die, or log and recover. Declare it once on the machine with a `catch` block:
 
 ```ts
+class DbError extends Data.TaggedError("DbError")<{
+  readonly cause: string;
+}> {}
+
 class MediaPlayer extends Machine.Service<
   MediaPlayer,
   States,
@@ -317,7 +323,8 @@ class MediaPlayer extends Machine.Service<
   Context,
   Output,
   Deps,
-  "MalformedSpec" | "TransitionLimit" // ← tags the machine catches
+  "MalformedSpec" | "TransitionLimit" | "DbError", // CaughtTags
+  DbError                                          // UserE
 >()("MediaPlayer") {}
 
 Machine.serviceLayer(
@@ -327,6 +334,7 @@ Machine.serviceLayer(
     catch: {
       MalformedSpec: (e) => Effect.die(e),
       TransitionLimit: (e) => Effect.die(e),
+      DbError: (e) => Effect.logError("db write failed", e),
     },
     // ...
   }),
@@ -334,8 +342,10 @@ Machine.serviceLayer(
 
 // Now:
 handle.dispatch(event)
-// → Effect<void> — both tags narrowed out, no pipe needed
+// → Effect<void> — all three tags narrowed out, no pipe needed
 ```
+
+Keys in `catch` are the exact `_tag` strings — `"MalformedSpec"` and `"TransitionLimit"` for the runtime errors, whatever `_tag` your `Data.TaggedError` subclass carries for user errors. The runtime routes each one through `Effect.catchTags` by matching on `_tag`.
 
 The policy applies uniformly to **every** dispatch surface:
 - `handle.dispatch(event)`
@@ -343,9 +353,9 @@ The policy applies uniformly to **every** dispatch surface:
 - `self.dispatch(event)` inside handlers
 - `self.dispatchOrFail(event)` inside handlers
 
-Not applied to the Layer's own construction channel — a bad `initial` state name or a runaway chain inside `ready` still bubbles up as a Layer error, so bootstrap problems don't get swallowed.
+Not applied to the Layer's own construction channel — a bad `initial` state name or a runaway chain inside `ready` still bubbles up as a Layer error, so bootstrap problems don't get swallowed. User errors from `ready` die rather than propagate.
 
-The class's `CaughtTags` generic enforces consistency: declaring `"MalformedSpec"` requires providing a handler for `MalformedSpec` in `catch` (and nothing else), declaring both requires both, and declaring neither forbids `catch` entirely. Mismatches are compile errors.
+The class's `CaughtTags` generic enforces consistency: declaring a tag at the class level requires providing a handler for it in `catch` (and no others), declaring none forbids `catch` entirely. Mismatches are compile errors. The `UserE` slot (optional, last) lists the user-defined `TaggedError` subclasses handlers can yield; omit it and only runtime tags are available.
 
 ### Spec-level `on:` — fallback handlers that fire in any state
 
@@ -484,4 +494,4 @@ Each notification forks the callback Effect, so a slow callback can't stall subs
 | `TransitionLimit` | A reentrant transition chain exceeds `REENTRY_DEPTH_CAP` (32). |
 | `MachineUninitialized` | Defensive case — `self` methods called before init. Not reachable by construction under the current spec shape. |
 
-`MalformedSpec` and `TransitionLimit` can be caught at the spec level via the `catch` block — see the ["Spec-level `catch`"](#spec-level-catch--handle-runtime-errors-once-not-at-every-call-site) section. Catching both narrows them out of `dispatch`/`dispatchOrFail`/`self.dispatch`/`self.dispatchOrFail` error channels.
+These runtime errors, along with any user-defined `TaggedError` your handlers yield, can be caught at the spec level via the `catch` block — see the ["Spec-level `catch`"](#spec-level-catch--absorb-tagged-errors-once-not-at-every-call-site) section. Catching a tag narrows it out of `dispatch` / `dispatchOrFail` / `self.dispatch` / `self.dispatchOrFail` error channels.

@@ -243,8 +243,8 @@ import {
   TransitionLimit,
   type MachineFactory,
   type MachineHandle,
-  type RuntimeErrorTag,
   type Spec,
+  type TaggedError,
 } from "./types.js";
 
 // =============================================================================
@@ -284,6 +284,7 @@ declare const _output: unique symbol;
 declare const _inputs: unique symbol;
 declare const _deps: unique symbol;
 declare const _caught: unique symbol;
+declare const _userE: unique symbol;
 
 /**
  * Marker interface held on the Service base class. Extends
@@ -298,11 +299,12 @@ export interface ServiceClass<
   Context,
   Output,
   R = never,
-  CaughtTags extends RuntimeErrorTag = never,
+  CaughtTags extends string = never,
+  UserE extends TaggedError = never,
 > extends ContextModule.TagClass<
   Self,
   string,
-  MachineHandle<States, Events, Output, CaughtTags>
+  MachineHandle<States, Events, Output, CaughtTags, UserE>
 > {
   // Phantom markers so the class carries the machine's generics —
   // used by serviceLayer to recover them. Optional so `class Foo
@@ -314,6 +316,7 @@ export interface ServiceClass<
   readonly [_output]?: Output;
   readonly [_deps]?: R;
   readonly [_caught]?: CaughtTags;
+  readonly [_userE]?: UserE;
   Default?: Layer.Layer<Self, MalformedSpec | TransitionLimit, R>;
 }
 
@@ -331,11 +334,12 @@ export interface FactoryClass<
   Context,
   Output,
   R = never,
-  CaughtTags extends RuntimeErrorTag = never,
+  CaughtTags extends string = never,
+  UserE extends TaggedError = never,
 > extends ContextModule.TagClass<
   Self,
   string,
-  MachineFactory<States, Events, Inputs, Output, CaughtTags>
+  MachineFactory<States, Events, Inputs, Output, CaughtTags, UserE>
 > {
   readonly [_states]?: States;
   readonly [_events]?: Events;
@@ -344,6 +348,7 @@ export interface FactoryClass<
   readonly [_output]?: Output;
   readonly [_deps]?: R;
   readonly [_caught]?: CaughtTags;
+  readonly [_userE]?: UserE;
   Default?: Layer.Layer<Self, never, R>;
 }
 
@@ -372,14 +377,24 @@ export const Service =
     Context,
     Output,
     R = never,
-    CaughtTags extends RuntimeErrorTag = never,
+    CaughtTags extends string = never,
+    UserE extends TaggedError = never,
   >() =>
   (
     name: string,
-  ): ServiceClass<Self, States, Events, Context, Output, R, CaughtTags> => {
+  ): ServiceClass<
+    Self,
+    States,
+    Events,
+    Context,
+    Output,
+    R,
+    CaughtTags,
+    UserE
+  > => {
     class ServiceBase extends Context.Tag(name)<
       Self,
-      MachineHandle<States, Events, Output, CaughtTags>
+      MachineHandle<States, Events, Output, CaughtTags, UserE>
     >() {}
     return ServiceBase as unknown as ServiceClass<
       Self,
@@ -388,7 +403,8 @@ export const Service =
       Context,
       Output,
       R,
-      CaughtTags
+      CaughtTags,
+      UserE
     >;
   };
 
@@ -406,7 +422,8 @@ export const Factory =
     Context,
     Output,
     R = never,
-    CaughtTags extends RuntimeErrorTag = never,
+    CaughtTags extends string = never,
+    UserE extends TaggedError = never,
   >() =>
   (
     name: string,
@@ -418,11 +435,12 @@ export const Factory =
     Context,
     Output,
     R,
-    CaughtTags
+    CaughtTags,
+    UserE
   > => {
     class FactoryBase extends Context.Tag(name)<
       Self,
-      MachineFactory<States, Events, Inputs, Output, CaughtTags>
+      MachineFactory<States, Events, Inputs, Output, CaughtTags, UserE>
     >() {}
     return FactoryBase as unknown as FactoryClass<
       Self,
@@ -432,7 +450,8 @@ export const Factory =
       Context,
       Output,
       R,
-      CaughtTags
+      CaughtTags,
+      UserE
     >;
   };
 
@@ -478,18 +497,29 @@ export const serviceLayer = <
   Context,
   Output,
   R,
-  CaughtTags extends RuntimeErrorTag = never,
+  CaughtTags extends string = never,
+  UserE extends TaggedError = never,
 >(
-  cls: ServiceClass<Self, States, Events, Context, Output, R, CaughtTags>,
+  cls: ServiceClass<
+    Self,
+    States,
+    Events,
+    Context,
+    Output,
+    R,
+    CaughtTags,
+    UserE
+  >,
   builder: Effect.Effect<
     Spec<
       States,
       Events,
       Context,
       Output,
-      MalformedSpec | TransitionLimit,
+      UserE | MalformedSpec | TransitionLimit,
       never,
-      CaughtTags
+      CaughtTags,
+      UserE
     >,
     never,
     R
@@ -497,11 +527,13 @@ export const serviceLayer = <
 ): Layer.Layer<Self, MalformedSpec | TransitionLimit, R> => {
   const tag = cls as unknown as Context.Tag<
     Self,
-    MachineHandle<States, Events, Output, CaughtTags>
+    MachineHandle<States, Events, Output, CaughtTags, UserE>
   >;
   return Layer.scoped(
     tag,
-    createRuntime<States, Events, Context, Output, R, CaughtTags>(builder),
+    createRuntime<States, Events, Context, Output, R, CaughtTags, UserE>(
+      builder,
+    ),
   );
 };
 
@@ -547,7 +579,8 @@ export const factoryLayer = <
   Context,
   Output,
   R,
-  CaughtTags extends RuntimeErrorTag = never,
+  CaughtTags extends string = never,
+  UserE extends TaggedError = never,
 >(
   cls: FactoryClass<
     Self,
@@ -557,7 +590,8 @@ export const factoryLayer = <
     Context,
     Output,
     R,
-    CaughtTags
+    CaughtTags,
+    UserE
   >,
   builder: Effect.Effect<
     {
@@ -569,9 +603,10 @@ export const factoryLayer = <
           Events,
           Context,
           Output,
-          MalformedSpec | TransitionLimit,
+          UserE | MalformedSpec | TransitionLimit,
           never,
-          CaughtTags
+          CaughtTags,
+          UserE
         >,
         never,
         Scope.Scope
@@ -583,7 +618,7 @@ export const factoryLayer = <
 ): Layer.Layer<Self, never, R> => {
   const tag = cls as unknown as Context.Tag<
     Self,
-    MachineFactory<States, Events, Inputs, Output, CaughtTags>
+    MachineFactory<States, Events, Inputs, Output, CaughtTags, UserE>
   >;
   return Layer.effect(
     tag,
@@ -594,7 +629,8 @@ export const factoryLayer = <
       Context,
       Output,
       R,
-      CaughtTags
+      CaughtTags,
+      UserE
     >(builder),
   );
 };
