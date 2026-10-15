@@ -185,11 +185,17 @@ export interface MachineSelf<States, Events, Context> {
    * result from a state fn or handler to trigger the state change.
    * Typing enforces that `name` is a valid state and `payload`
    * matches that state's declared shape.
+   *
+   * Returns an Effect so the one-line case (`() =>
+   * self.transition("name")`) reads clean without an
+   * `Effect.succeed(...)` wrapper. From inside a `gen`, use
+   * `return yield* self.transition(...)` — same shape as
+   * `self.transitionAwait`.
    */
   transition<K extends keyof States & string>(
     name: K,
     ...args: PayloadArg<States[K]>
-  ): Transition<K, States[K]>;
+  ): Effect.Effect<Transition<K, States[K]>>;
 
   /**
    * Construct a transition that fires when `register`'s `go`

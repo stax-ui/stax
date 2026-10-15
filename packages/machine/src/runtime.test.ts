@@ -69,7 +69,7 @@ const CounterLayer = Machine.serviceLayer(
       RESET: (self) =>
         Effect.gen(function* () {
           yield* self.assign({ count: 0 });
-          return self.transition("idle");
+          return yield* self.transition("idle");
         }),
     },
     states: {
@@ -77,11 +77,11 @@ const CounterLayer = Machine.serviceLayer(
         Effect.succeed({
           INC: () => self.assign((ctx) => ({ count: ctx.count + 1 })),
           DEC: () => self.assign((ctx) => ({ count: ctx.count - 1 })),
-          FREEZE: () => Effect.succeed(self.transition("frozen")),
+          FREEZE: () => self.transition("frozen"),
         }),
       frozen: (self) =>
         Effect.succeed({
-          UNFREEZE: () => Effect.succeed(self.transition("idle")),
+          UNFREEZE: () => self.transition("idle"),
         }),
     },
   }),
@@ -356,8 +356,8 @@ describe("Machine runtime — Service", () => {
         context: {},
         output: () => ({}),
         states: {
-          a: (self) => Effect.succeed(self.transition("b")),
-          b: (self) => Effect.succeed(self.transition("a")),
+          a: (self) => self.transition("b"),
+          b: (self) => self.transition("a"),
         },
       }),
     );
@@ -412,8 +412,7 @@ describe("Machine runtime — Service", () => {
           good: (self) =>
             Effect.succeed({
               // Cast to sneak a bogus state name past the compiler.
-              GO_BAD: () =>
-                Effect.succeed(self.transition("bogus" as never, {} as never)),
+              GO_BAD: () => self.transition("bogus" as never, {} as never),
             }),
         },
       }),
@@ -1088,7 +1087,7 @@ describe("Machine runtime — global `on:` edge cases", () => {
         context: {},
         output: () => ({}),
         on: {
-          CANCEL: (self) => Effect.succeed(self.transition("cancelled")),
+          CANCEL: (self) => self.transition("cancelled"),
         },
         states: {
           waiting: (self) =>

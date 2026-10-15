@@ -64,17 +64,20 @@ declare const self: MachineSelf<SessionStates, SessionEvents, SessionContext>;
 // `self.transition(...)` — the core typing story
 // =============================================================================
 
-// State names narrow correctly.
-const _t1: Transition<"signedIn", { user: User }> = self.transition(
-  "signedIn",
-  { user: { id: "u1", name: "n" } },
-);
+// State names narrow correctly. The returned Effect's success value
+// is the Transition.
+const _t1: Effect.Effect<Transition<"signedIn", { user: User }>> =
+  self.transition("signedIn", { user: { id: "u1", name: "n" } });
 
 // Empty payloads can be omitted.
-const _t2: Transition<"signedOut", {}> = self.transition("signedOut");
+const _t2: Effect.Effect<Transition<"signedOut", {}>> =
+  self.transition("signedOut");
 
 // Empty payload can also be passed explicitly as `{}`.
-const _t3: Transition<"booting", {}> = self.transition("booting", {});
+const _t3: Effect.Effect<Transition<"booting", {}>> = self.transition(
+  "booting",
+  {},
+);
 
 // @ts-expect-error - "bogus" isn't a valid state name.
 self.transition("bogus");
@@ -87,11 +90,6 @@ self.transition("signedIn", { user: 123 });
 
 // @ts-expect-error - payload has extra key `bogus`.
 self.transition("signedIn", { user: { id: "u1", name: "n" }, bogus: 1 });
-
-// The return type carries the narrowed literal state name.
-const _narrowed: "signedIn" = self.transition("signedIn", {
-  user: { id: "u1", name: "n" },
-}).target;
 
 // =============================================================================
 // `self.assign(...)` — Context typing
@@ -188,12 +186,12 @@ const _hm: HandlerMap<SessionStates, SessionEvents> = {
   AUTHENTICATED: ({ user }) =>
     Effect.gen(function* () {
       yield* self.assign({ user, lastLoginAt: Date.now() });
-      return self.transition("signedIn", { user });
+      return yield* self.transition("signedIn", { user });
     }),
   SIGN_OUT: () =>
     Effect.gen(function* () {
       yield* self.assign({ user: null });
-      return self.transition("signedOut");
+      return yield* self.transition("signedOut");
     }),
 };
 
@@ -203,12 +201,14 @@ const _hmBad: HandlerMap<SessionStates, SessionEvents> = {
 };
 
 // Handler payload is typed against the event map — the destructure
-// only compiles if `payload` really is `{ user: User }`.
+// only compiles if `payload` really is `{ user: User }`. One-line
+// case where the handler just transitions: no wrapper needed since
+// `self.transition` returns an Effect directly.
 const _hmPayload: HandlerMap<SessionStates, SessionEvents> = {
   AUTHENTICATED: (payload) => {
     const _user: User = payload.user;
     void _user;
-    return Effect.succeed(self.transition("signedOut"));
+    return self.transition("signedOut");
   },
 };
 void _hmPayload;
@@ -217,13 +217,19 @@ void _hmPayload;
 // `AnyTransition` — the discriminated union
 // =============================================================================
 
-// Every state name appears in the union.
-const _anyT1: AnyTransition<SessionStates> = self.transition("booting");
-const _anyT2: AnyTransition<SessionStates> = self.transition("signedIn", {
-  user: { id: "u1", name: "n" },
-});
-const _anyT3: AnyTransition<SessionStates> = self.transition("expired");
-const _anyT4: AnyTransition<SessionStates> = self.transition("signedOut");
+// Every state name appears in the union. `self.transition` returns
+// `Effect<AnyTransition>` under this discriminated union, so each
+// variant's Effect flows into the union through the Effect's A.
+const _anyT1: Effect.Effect<AnyTransition<SessionStates>> =
+  self.transition("booting");
+const _anyT2: Effect.Effect<AnyTransition<SessionStates>> = self.transition(
+  "signedIn",
+  { user: { id: "u1", name: "n" } },
+);
+const _anyT3: Effect.Effect<AnyTransition<SessionStates>> =
+  self.transition("expired");
+const _anyT4: Effect.Effect<AnyTransition<SessionStates>> =
+  self.transition("signedOut");
 
 // =============================================================================
 // `Spec` — the full spec object shape
@@ -240,22 +246,19 @@ const _spec: Spec<SessionStates, SessionEvents, SessionContext, SessionOutput> =
       SIGN_OUT: (self) =>
         Effect.gen(function* () {
           yield* self.assign({ user: null });
-          return self.transition("signedOut");
+          return yield* self.transition("signedOut");
         }),
     },
     states: {
       // State fns take (self, payload). Handlers inside a state fn
       // close over the state fn's self — they only receive payload.
-      booting: (self, _) =>
-        Effect.gen(function* () {
-          return self.transition("signedOut");
-        }),
+      booting: (self) => self.transition("signedOut"),
       signedOut: (self, _) =>
         Effect.succeed({
           AUTHENTICATED: ({ user }: { user: User }) =>
             Effect.gen(function* () {
               yield* self.assign({ user });
-              return self.transition("signedIn", { user });
+              return yield* self.transition("signedIn", { user });
             }),
         }),
       signedIn: (self, { user: _u }) =>
@@ -263,7 +266,7 @@ const _spec: Spec<SessionStates, SessionEvents, SessionContext, SessionOutput> =
           EXPIRE: () =>
             Effect.gen(function* () {
               yield* self.assign({ user: null });
-              return self.transition("expired");
+              return yield* self.transition("expired");
             }),
         }),
       expired: (self, _) =>
@@ -271,7 +274,7 @@ const _spec: Spec<SessionStates, SessionEvents, SessionContext, SessionOutput> =
           AUTHENTICATED: ({ user }: { user: User }) =>
             Effect.gen(function* () {
               yield* self.assign({ user });
-              return self.transition("signedIn", { user });
+              return yield* self.transition("signedIn", { user });
             }),
         }),
     },
@@ -379,7 +382,6 @@ void _ns4;
 void _t1;
 void _t2;
 void _t3;
-void _narrowed;
 void _a1;
 void _a2;
 void _a3;

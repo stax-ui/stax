@@ -137,12 +137,11 @@ export const MediaPlayerLive = Machine.serviceLayer(
     // precedence rule is per-state wins, so if a state ever grew its
     // own LOAD handler it would shadow this one for that state.
     on: {
-      LOAD: (self, { trackId }) =>
-        Effect.succeed(self.transition("loading", { trackId })),
+      LOAD: (self, { trackId }) => self.transition("loading", { trackId }),
       STOP: (self) =>
         Effect.gen(function* () {
           yield* self.assign(emptyContext);
-          return self.transition("idle");
+          return yield* self.transition("idle");
         }),
     },
 
@@ -161,7 +160,7 @@ export const MediaPlayerLive = Machine.serviceLayer(
         Effect.gen(function* () {
           const track = findTrack(trackId);
           if (!track) {
-            return self.transition("idle");
+            return yield* self.transition("idle");
           }
           yield* self.assign({
             trackId,
@@ -187,13 +186,13 @@ export const MediaPlayerLive = Machine.serviceLayer(
               .pipe(Effect.repeat(Schedule.spaced(`${TICK_MS} millis`))),
           );
           return {
-            PAUSE: () => Effect.succeed(self.transition("paused")),
+            PAUSE: () => self.transition("paused"),
             TICK: () => {
               const next = self.context.position + TICK_MS;
               if (next >= self.context.duration) {
                 return Effect.gen(function* () {
                   yield* self.assign({ position: self.context.duration });
-                  return self.transition("ended");
+                  return yield* self.transition("ended");
                 });
               }
               return self.assign({ position: next });
@@ -203,7 +202,7 @@ export const MediaPlayerLive = Machine.serviceLayer(
 
       paused: (self) =>
         Effect.succeed({
-          PLAY: () => Effect.succeed(self.transition("playing")),
+          PLAY: () => self.transition("playing"),
         }),
 
       // Reached end of track. Globals (LOAD / STOP) handle the exit.

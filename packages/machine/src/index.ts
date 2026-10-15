@@ -78,20 +78,20 @@
  *         signedOut: (self) =>
  *           Effect.succeed({
  *             SIGN_IN: ({ email, password }) =>
- *               Effect.succeed(self.transition("signingIn", { email })),
+ *               self.transition("signingIn", { email }),
  *           }),
  *         signingIn: (self, { email }) =>
  *           Effect.gen(function* () {
  *             const user = yield* auth.signIn({ email });
  *             yield* self.assign({ user });
- *             return self.transition("signedIn", { user });
+ *             return yield* self.transition("signedIn", { user });
  *           }),
  *         signedIn: (self) =>
  *           Effect.succeed({
  *             SIGN_OUT: () =>
  *               Effect.gen(function* () {
  *                 yield* self.assign({ user: null });
- *                 return self.transition("signedOut");
+ *                 return yield* self.transition("signedOut");
  *               }),
  *           }),
  *       },
@@ -182,30 +182,30 @@
  *           states: {
  *             idle: (self) =>
  *               Effect.succeed({
- *                 FETCH: () => Effect.succeed(self.transition("fetching")),
+ *                 FETCH: () => self.transition("fetching"),
  *               }),
  *             fetching: (self) =>
  *               http.get(self.context.url).pipe(
  *                 Effect.flatMap((data) =>
  *                   Effect.gen(function* () {
  *                     yield* self.assign({ data });
- *                     return self.transition("loaded", { data });
+ *                     return yield* self.transition("loaded", { data });
  *                   }),
  *                 ),
  *                 Effect.catchAll((error) =>
  *                   Effect.gen(function* () {
  *                     yield* self.assign({ error });
- *                     return self.transition("failed", { error });
+ *                     return yield* self.transition("failed", { error });
  *                   }),
  *                 ),
  *               ),
  *             loaded: (self) =>
  *               Effect.succeed({
- *                 FETCH: () => Effect.succeed(self.transition("fetching")),
+ *                 FETCH: () => self.transition("fetching"),
  *               }),
  *             failed: (self) =>
  *               Effect.succeed({
- *                 RETRY: () => Effect.succeed(self.transition("fetching")),
+ *                 RETRY: () => self.transition("fetching"),
  *               }),
  *           },
  *         }),
@@ -427,7 +427,7 @@ export const Factory =
  *         self.assign({ token: t }),
  *       ),
  *       states: {
- *         booting: (self, _) => Effect.succeed(self.transition("signedOut")),
+ *         booting: (self) => self.transition("signedOut"),
  *         // ...
  *       },
  *     };

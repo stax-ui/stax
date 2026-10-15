@@ -275,11 +275,11 @@ const instantiateMachine = <States, Events, Context, Output>(
       dispatchOrFail: (event: string, ...args: [] | [unknown]) =>
         enqueue(runtime, event, args[0], "fail"),
       transition: (name: string, ...args: [] | [unknown]) =>
-        ({
+        Effect.succeed({
           [TransitionTypeId]: TransitionTypeId,
           target: name,
           payload: args[0] ?? {},
-        }) as Transition,
+        } as Transition),
       transitionAwait: (
         register: (go: () => void) => () => void,
         name: string,

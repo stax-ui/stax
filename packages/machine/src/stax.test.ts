@@ -53,7 +53,7 @@ const CounterLayer = Machine.serviceLayer(
       RESET: (self) =>
         Effect.gen(function* () {
           yield* self.assign({ count: 0 });
-          return self.transition("idle");
+          return yield* self.transition("idle");
         }),
     },
     states: {
@@ -61,11 +61,11 @@ const CounterLayer = Machine.serviceLayer(
         Effect.succeed({
           INC: () => self.assign((ctx) => ({ count: ctx.count + 1 })),
           DEC: () => self.assign((ctx) => ({ count: ctx.count - 1 })),
-          FREEZE: () => Effect.succeed(self.transition("frozen")),
+          FREEZE: () => self.transition("frozen"),
         }),
       frozen: (self) =>
         Effect.succeed({
-          UNFREEZE: () => Effect.succeed(self.transition("idle")),
+          UNFREEZE: () => self.transition("idle"),
         }),
     },
   }),
