@@ -92,47 +92,39 @@ const shallowEqual = (a: unknown, b: unknown): boolean => {
 const REENTRY_DEPTH_CAP = 32;
 
 /**
- * Wrap an Effect<void, E> with `Effect.catchTag` for each handler
- * the spec declared under `catch`. Each handler takes the matched
- * error and returns `Effect<void>` — once applied, that tag drops
- * out of the Effect's error channel. Called at every dispatch
- * surface (`handle.dispatch` / `handle.dispatchOrFail` /
- * `self.dispatch` / `self.dispatchOrFail`) so the catch policy
- * applies uniformly to any path that could surface a runtime error.
+ * Wrap an Effect with `Effect.catchTags` for each handler the spec
+ * declared under `catch`. Once applied, the handled tags drop out
+ * of the Effect's error channel. Called at every dispatch surface
+ * (`handle.dispatch` / `handle.dispatchOrFail` / `self.dispatch` /
+ * `self.dispatchOrFail`) so the catch policy applies uniformly to
+ * any path that could surface a runtime error.
  *
  * The runtime impl stays type-opaque — the handle/self interfaces
  * carry the `CaughtTags` generic, which does the narrowing at the
- * boundary. Here we just do the Effect-level wrapping.
+ * boundary. Here we just do the Effect-level wrapping, keyed by the
+ * full `_tag` string each error class carries at runtime.
  */
 const applyCatches = <E>(
-  spec: Spec<unknown, unknown, unknown, unknown, unknown, unknown, never>,
+  catches: RuntimeCatches,
   effect: Effect.Effect<void, E>,
 ): Effect.Effect<void, E> => {
-  // The `catch` field is only present on specs whose CaughtTags is
-  // non-empty — safe to read via `in` and treat as optional here
-  // because the type signature using `never` means TS can't see it.
-  const catches = (
-    spec as unknown as {
-      catch?: Partial<
-        Record<RuntimeErrorTag, (e: unknown) => Effect.Effect<void>>
-      >;
-    }
-  ).catch;
   if (!catches) return effect;
-  // Build the `Effect.catchTags` handler map, keyed by the full
-  // `_tag` string each error class carries. `catchTags` applies all
-  // handlers in one pass and narrows the error channel for each
-  // matched tag. The runtime impl is intentionally type-opaque; the
-  // handle/self interface types do the actual narrowing at the
-  // consumer boundary via `UncaughtRuntimeErrors<CaughtTags>`.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const handlerMap: Record<string, (e: any) => Effect.Effect<void>> = {};
+  const handlerMap: Record<
+    string,
+    (e: { readonly _tag: string }) => Effect.Effect<void>
+  > = {};
   for (const tag of Object.keys(catches) as RuntimeErrorTag[]) {
     const handler = catches[tag];
     if (handler) {
-      handlerMap[`@stax-ui/machine/${tag}`] = handler;
+      handlerMap[`@stax-ui/machine/${tag}`] = handler as (e: {
+        readonly _tag: string;
+      }) => Effect.Effect<void>;
     }
   }
+  // Open the Effect's error channel to a tagged shape so
+  // `Effect.catchTags` can match on `_tag`. The return cast closes
+  // it back to the original `E`, minus whatever `catchTags` handled
+  // — the handle/self interface types reflect that at the boundary.
   return (
     effect as unknown as Effect.Effect<void, { readonly _tag: string }>
   ).pipe(Effect.catchTags(handlerMap)) as Effect.Effect<void, E>;
@@ -147,9 +139,27 @@ interface QueuedEvent {
   readonly payload: unknown;
 }
 
+/**
+ * Runtime-side type for the catch handler map. The user-facing
+ * `CatchHandlerMap<CaughtTags>` has concrete tag keys; here we treat
+ * every entry as optional with `unknown` payload, so the dispatch
+ * sites don't need to know the user's `CaughtTags`.
+ */
+type RuntimeCatches =
+  | Partial<Record<RuntimeErrorTag, (e: unknown) => Effect.Effect<void>>>
+  | undefined;
+
 interface Runtime<States, Events, Context, Output> {
   // Machine identity + spec
   readonly spec: Spec<States, Events, Context, Output>;
+
+  /**
+   * Pre-extracted spec-level catches, keyed by `RuntimeErrorTag`.
+   * `undefined` when the spec has no catch block. Pulled off the
+   * spec once at `instantiateMachine` so the dispatch surfaces don't
+   * re-read the field (or re-assert its runtime type) on every call.
+   */
+  readonly catches: RuntimeCatches;
 
   // The `self` handle for this runtime — passed to state fns,
   // handlers, `ready`, and any callback the runtime invokes.
@@ -333,8 +343,14 @@ const instantiateMachine = <
     // Two-step: allocate with a placeholder `self` so `self`
     // itself can close over `runtime` (their references are
     // mutually cyclic). Patch in the real `self` below.
+    // The `catch` field is present on specs whose `CaughtTags` is
+    // non-empty — read it off the spec here with an opaque cast so
+    // the dispatch sites don't need to re-cast each time.
+    const catches = (spec as { readonly catch?: RuntimeCatches }).catch;
+
     const runtime: Runtime<States, Events, Context, Output> = {
       spec,
+      catches,
       self: null as unknown as MachineSelf<States, Events, Context>,
       currentState: spec.initial,
       currentPayload: {},
@@ -365,31 +381,9 @@ const instantiateMachine = <
       },
       assign: (patchOrFn: unknown) => applyAssign(runtime, patchOrFn),
       dispatch: (event: string, ...args: [] | [unknown]) =>
-        applyCatches(
-          runtime.spec as unknown as Spec<
-            unknown,
-            unknown,
-            unknown,
-            unknown,
-            unknown,
-            unknown,
-            never
-          >,
-          enqueue(runtime, event, args[0]),
-        ),
+        applyCatches(runtime.catches, enqueue(runtime, event, args[0])),
       dispatchOrFail: (event: string, ...args: [] | [unknown]) =>
-        applyCatches(
-          runtime.spec as unknown as Spec<
-            unknown,
-            unknown,
-            unknown,
-            unknown,
-            unknown,
-            unknown,
-            never
-          >,
-          enqueue(runtime, event, args[0], "fail"),
-        ),
+        applyCatches(runtime.catches, enqueue(runtime, event, args[0], "fail")),
       transition: (name: string, ...args: [] | [unknown]) =>
         Effect.succeed({
           [TransitionTypeId]: TransitionTypeId,
@@ -1046,31 +1040,9 @@ const buildHandle = <States, Events, Context, Output>(
       ),
 
     dispatch: (event: string, ...args: [] | [unknown]) =>
-      applyCatches(
-        runtime.spec as unknown as Spec<
-          unknown,
-          unknown,
-          unknown,
-          unknown,
-          unknown,
-          unknown,
-          never
-        >,
-        enqueue(runtime, event, args[0]),
-      ),
+      applyCatches(runtime.catches, enqueue(runtime, event, args[0])),
     dispatchOrFail: (event: string, ...args: [] | [unknown]) =>
-      applyCatches(
-        runtime.spec as unknown as Spec<
-          unknown,
-          unknown,
-          unknown,
-          unknown,
-          unknown,
-          unknown,
-          never
-        >,
-        enqueue(runtime, event, args[0], "fail"),
-      ),
+      applyCatches(runtime.catches, enqueue(runtime, event, args[0], "fail")),
 
     // Suspend until the machine enters `name`. Short-circuits if we're
     // already there (otherwise consumers of a settle-detector would
