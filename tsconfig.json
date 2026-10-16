@@ -25,6 +25,8 @@
       "@stax-ui/platform/ssg-adapter/runtime": [
         "packages/platform/src/ssg-adapter-runtime.ts"
       ],
+      "@stax-ui/machine": ["packages/machine/src/index.ts"],
+      "@stax-ui/machine/stax": ["packages/machine/src/stax.ts"],
       "@stax-ui/vite-plugin": ["packages/vite-plugin/src/index.ts"]
     }
   },

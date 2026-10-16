@@ -25,6 +25,7 @@ overrides:
   "@stax-ui/core": "workspace:*"
   "@stax-ui/dom": "workspace:*"
   "@stax-ui/form": "workspace:*"
+  "@stax-ui/machine": "workspace:*"
   "@stax-ui/platform": "workspace:*"
   "@stax-ui/router": "workspace:*"
   "@stax-ui/vite-plugin": "workspace:*"

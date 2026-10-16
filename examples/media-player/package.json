@@ -1,0 +1,24 @@
+{
+  "name": "media-player",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@stax-ui/core": "workspace:*",
+    "@stax-ui/dom": "workspace:*",
+    "@stax-ui/machine": "workspace:*",
+    "@tailwindcss/vite": "^4.1.18",
+    "effect": "^3.0.0",
+    "tailwindcss": "^4.1.18"
+  },
+  "devDependencies": {
+    "daisyui": "^5.5.18",
+    "typescript": "~5.9.3",
+    "vite": "^7.0.0"
+  }
+}
