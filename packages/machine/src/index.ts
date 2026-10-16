@@ -28,14 +28,14 @@
  * // state-fn arg and the transition-arg for a given state are both
  * // typed against the value here.
  * interface SessionStates {
- *   signedOut: {};
+ *   signedOut: undefined;
  *   signingIn: { email: string };
  *   signedIn: { user: User };
  * }
  *
  * interface SessionEvents {
  *   SIGN_IN: { email: string; password: string };
- *   SIGN_OUT: {};
+ *   SIGN_OUT: undefined;
  * }
  *
  * interface SessionContext {
@@ -127,14 +127,14 @@
  *
  * ```ts
  * interface FetcherStates {
- *   idle: {};
- *   fetching: {};
+ *   idle: undefined;
+ *   fetching: undefined;
  *   loaded: { data: Data };
  *   failed: { error: FetchError };
  * }
  * interface FetcherEvents {
- *   FETCH: {};
- *   RETRY: {};
+ *   FETCH: undefined;
+ *   RETRY: undefined;
  * }
  * interface FetcherContext {
  *   url: string;

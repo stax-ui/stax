@@ -60,25 +60,28 @@ import { findTrack } from "./tracks.js";
 // Types
 // =============================================================================
 
+// `undefined` is the "no payload" spelling. `{}` works too but
+// `@typescript-eslint/no-empty-object-type` flags it as "any
+// non-nullish value," which isn't the intent here.
 export interface PlayerStates {
-  idle: {};
+  idle: undefined;
   loading: { trackId: string };
-  playing: {};
-  paused: {};
-  ended: {};
+  playing: undefined;
+  paused: undefined;
+  ended: undefined;
 }
 
 export interface PlayerEvents {
   /** Load a track by id. Fires from any state via the global `on:`. */
   LOAD: { trackId: string };
   /** Resume playback. Only handled in `paused`. */
-  PLAY: {};
+  PLAY: undefined;
   /** Pause playback. Only handled in `playing`. */
-  PAUSE: {};
+  PAUSE: undefined;
   /** Stop and clear the loaded track. Fires from any state. */
-  STOP: {};
+  STOP: undefined;
   /** Internal — enqueued by the forked ticker while `playing`. */
-  TICK: {};
+  TICK: undefined;
 }
 
 export interface PlayerContext {

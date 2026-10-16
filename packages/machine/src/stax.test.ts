@@ -13,15 +13,15 @@ import { Machine, type MachineHandle } from "./index.js";
 import { MachineReadable } from "./stax.js";
 
 interface CounterStates {
-  idle: {};
-  frozen: {};
+  idle: undefined;
+  frozen: undefined;
 }
 interface CounterEvents {
-  INC: {};
-  DEC: {};
-  FREEZE: {};
-  UNFREEZE: {};
-  RESET: {};
+  INC: undefined;
+  DEC: undefined;
+  FREEZE: undefined;
+  UNFREEZE: undefined;
+  RESET: undefined;
 }
 interface CounterContext {
   count: number;

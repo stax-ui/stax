@@ -367,7 +367,13 @@ const instantiateMachine = <
         Effect.succeed({
           [TransitionTypeId]: TransitionTypeId,
           target: name,
-          payload: args[0] ?? {},
+          // Pass through whatever payload the caller gave us —
+          // including `undefined` when the state's declared payload
+          // type IS `undefined`. The old default of `{}` lied about
+          // the state fn's incoming payload type for no-payload
+          // states; passing through what we got keeps the runtime
+          // and type stories aligned.
+          payload: args[0],
         } as Transition),
       transitionAwait: (
         register: (go: () => void) => () => void,

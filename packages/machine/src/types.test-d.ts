@@ -12,7 +12,7 @@
  * runner.
  */
 
-import { Effect } from "effect";
+import { Data, Effect } from "effect";
 
 import {
   Machine,
@@ -37,16 +37,16 @@ interface User {
 // -----------------------------------------------------------------------------
 
 interface SessionStates {
-  booting: {};
-  signedOut: {};
+  booting: undefined;
+  signedOut: undefined;
   signedIn: { user: User };
-  expired: {};
+  expired: undefined;
 }
 
 interface SessionEvents {
   AUTHENTICATED: { user: User };
-  SIGN_OUT: {};
-  EXPIRE: {};
+  SIGN_OUT: undefined;
+  EXPIRE: undefined;
 }
 
 interface SessionContext {
@@ -70,13 +70,13 @@ const _t1: Effect.Effect<Transition<"signedIn", { user: User }>> =
   self.transition("signedIn", { user: { id: "u1", name: "n" } });
 
 // Empty payloads can be omitted.
-const _t2: Effect.Effect<Transition<"signedOut", {}>> =
+const _t2: Effect.Effect<Transition<"signedOut", undefined>> =
   self.transition("signedOut");
 
-// Empty payload can also be passed explicitly as `{}`.
-const _t3: Effect.Effect<Transition<"booting", {}>> = self.transition(
+// Empty payload can also be passed explicitly.
+const _t3: Effect.Effect<Transition<"booting", undefined>> = self.transition(
   "booting",
-  {},
+  undefined,
 );
 
 // @ts-expect-error - "bogus" isn't a valid state name.
@@ -124,6 +124,7 @@ const _ctxUser: User | null = self.context.user;
 const _ctxLast: number | null = self.context.lastLoginAt;
 
 // @ts-expect-error - context has no `bogus` field.
+// eslint-disable-next-line @typescript-eslint/no-unused-expressions
 self.context.bogus;
 
 // =============================================================================
@@ -158,10 +159,8 @@ const _f1: Effect.Effect<void, import("./index.js").UnhandledEvent> =
 
 declare const register: (go: () => void) => () => void;
 
-const _ta1: Effect.Effect<Transition<"signedOut", {}>> = self.transitionAwait(
-  register,
-  "signedOut",
-);
+const _ta1: Effect.Effect<Transition<"signedOut", undefined>> =
+  self.transitionAwait(register, "signedOut");
 
 // @ts-expect-error - wrong target state.
 self.transitionAwait(register, "bogus");
@@ -320,8 +319,8 @@ interface ConversationInputs {
   initialConversationId?: string;
 }
 interface ConversationStates {
-  idle: {};
-  pending: {};
+  idle: undefined;
+  pending: undefined;
 }
 interface ConversationEvents {
   SEND: { message: string };
@@ -356,6 +355,148 @@ void factory.spawn({ initialConversationId: "c1" });
 void factory.spawn({});
 // @ts-expect-error - bogus field on Inputs.
 factory.spawn({ bogus: 1 });
+
+// =============================================================================
+// Spec-level `catch` + `UserE` — error-channel narrowing
+// =============================================================================
+
+// A user-defined tagged error — the shape handlers can yield.
+class DbError extends Data.TaggedError("DbError")<{
+  readonly cause: string;
+}> {}
+class ValidationError extends Data.TaggedError("ValidationError")<{
+  readonly field: string;
+}> {}
+
+interface CatchStates {
+  ready: undefined;
+}
+interface CatchEvents {
+  WRITE: undefined;
+  VALIDATE: undefined;
+}
+
+// -----------------------------------------------------------------------------
+// Case A — no `UserE` declared → dispatch error channel is `never`.
+// -----------------------------------------------------------------------------
+declare const noUserE: import("./index.js").MachineHandle<
+  CatchStates,
+  CatchEvents,
+  Record<string, never>
+>;
+const _dispatchA: Effect.Effect<void> = noUserE.dispatch("WRITE");
+void _dispatchA;
+
+// -----------------------------------------------------------------------------
+// Case B — `UserE` declared, `CaughtTags` empty → every tag flows on
+// dispatch's channel for the caller to handle inline.
+// -----------------------------------------------------------------------------
+declare const openUserE: import("./index.js").MachineHandle<
+  CatchStates,
+  CatchEvents,
+  Record<string, never>,
+  never,
+  DbError | ValidationError
+>;
+const _dispatchB: Effect.Effect<void, DbError | ValidationError> =
+  openUserE.dispatch("WRITE");
+void _dispatchB;
+
+// -----------------------------------------------------------------------------
+// Case C — `CaughtTags` picks a subset → that tag is narrowed out of
+// dispatch's channel, the rest still flow.
+// -----------------------------------------------------------------------------
+declare const partialCaught: import("./index.js").MachineHandle<
+  CatchStates,
+  CatchEvents,
+  Record<string, never>,
+  "DbError",
+  DbError | ValidationError
+>;
+const _dispatchC: Effect.Effect<void, ValidationError> =
+  partialCaught.dispatch("WRITE");
+void _dispatchC;
+
+// -----------------------------------------------------------------------------
+// Case D — `catch` on the spec is forbidden when `CaughtTags` is empty.
+// -----------------------------------------------------------------------------
+type SpecNoCaught = import("./index.js").Spec<
+  CatchStates,
+  CatchEvents,
+  Record<string, never>,
+  Record<string, never>
+>;
+
+// Legal — no `catch` field.
+const _specNoCatch: SpecNoCaught = {
+  initial: "ready",
+  context: {},
+  output: () => ({}),
+  states: {
+    ready: () => Effect.succeed(undefined),
+  },
+};
+void _specNoCatch;
+
+// Any `catch` field is an error since `CaughtTags` is `never` — the
+// intersection resolves to the no-extra-fields branch.
+const _specStrayCatch: SpecNoCaught = {
+  initial: "ready",
+  context: {},
+  output: () => ({}),
+  states: {
+    ready: () => Effect.succeed(undefined),
+  },
+  // @ts-expect-error - `catch` is not allowed on a spec with `CaughtTags = never`.
+  catch: {
+    DbError: () => Effect.void,
+  },
+};
+void _specStrayCatch;
+
+// -----------------------------------------------------------------------------
+// Case E — `catch` on the spec is required when `CaughtTags` is non-empty,
+// and keyed exactly against the declared tags.
+// -----------------------------------------------------------------------------
+type SpecWithCaught = import("./index.js").Spec<
+  CatchStates,
+  CatchEvents,
+  Record<string, never>,
+  Record<string, never>,
+  DbError,
+  never,
+  "DbError",
+  DbError
+>;
+
+// Legal — provides the required `DbError` handler.
+const _specWithCatch: SpecWithCaught = {
+  initial: "ready",
+  context: {},
+  output: () => ({}),
+  states: {
+    ready: () => Effect.succeed(undefined),
+  },
+  catch: {
+    DbError: (e) =>
+      Effect.sync(() => {
+        void e.cause;
+      }),
+  },
+};
+void _specWithCatch;
+
+// Missing the required `catch` field entirely.
+// @ts-expect-error - `catch` is required when `CaughtTags` is non-empty.
+const _specMissingCatch: SpecWithCaught = {
+  initial: "ready",
+  context: {},
+  output: () => ({}),
+  states: {
+    ready: () => Effect.succeed(undefined),
+  },
+};
+void _specMissingCatch;
 
 // =============================================================================
 // Sanity — Machine namespace has the expected members

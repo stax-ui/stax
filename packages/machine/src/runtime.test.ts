@@ -28,15 +28,15 @@ const runScoped = <A>(
 // -----------------------------------------------------------------------------
 
 interface CounterStates {
-  idle: {};
-  frozen: {};
+  idle: undefined;
+  frozen: undefined;
 }
 interface CounterEvents {
-  INC: {};
-  DEC: {};
-  FREEZE: {};
-  UNFREEZE: {};
-  RESET: {};
+  INC: undefined;
+  DEC: undefined;
+  FREEZE: undefined;
+  UNFREEZE: undefined;
+  RESET: undefined;
 }
 interface CounterContext {
   count: number;
@@ -283,10 +283,10 @@ describe("Machine runtime — Service", () => {
     // A separate machine whose handler does two assigns; we expect
     // subscribe to fire exactly once per dispatched event.
     interface BatchStates {
-      idle: {};
+      idle: undefined;
     }
     interface BatchEvents {
-      BUMP: {};
+      BUMP: undefined;
     }
     interface BatchContext {
       a: number;
@@ -343,9 +343,9 @@ describe("Machine runtime — Service", () => {
     // twice, then settles in `done`. Without a depth cap and
     // trampolined state entry, this runs through cleanly.
     interface CycleStates {
-      a: {};
-      b: {};
-      done: {};
+      a: undefined;
+      b: undefined;
+      done: undefined;
     }
     interface CycleCtx {
       flipped: boolean;
@@ -356,7 +356,7 @@ describe("Machine runtime — Service", () => {
     class Cycle extends Machine.Service<
       Cycle,
       CycleStates,
-      {},
+      Record<string, never>,
       CycleCtx,
       CycleOutput,
       never
@@ -397,14 +397,14 @@ describe("Machine runtime — Service", () => {
     // (`as never`); treat it as a programmer bug — die, not a
     // typed error — so it never shows up on the dispatch channel.
     interface BadStates {
-      good: {};
+      good: undefined;
     }
     class Bad extends Machine.Service<
       Bad,
       BadStates,
-      { GO_BAD: {} },
-      {},
-      {},
+      { GO_BAD: undefined },
+      Record<string, never>,
+      Record<string, never>,
       never
     >()("Bad") {}
 
@@ -459,12 +459,17 @@ describe("Machine runtime — Service", () => {
     // closing the scope interrupts cleanly. Verifies the trampoline
     // doesn't trap the fiber in an uninterruptable region.
     interface SpinStates {
-      a: {};
-      b: {};
+      a: undefined;
+      b: undefined;
     }
-    class Spin extends Machine.Service<Spin, SpinStates, {}, {}, {}, never>()(
-      "Spin",
-    ) {}
+    class Spin extends Machine.Service<
+      Spin,
+      SpinStates,
+      Record<string, never>,
+      Record<string, never>,
+      Record<string, never>,
+      never
+    >()("Spin") {}
 
     const layer = Machine.serviceLayer(
       Spin,
@@ -507,7 +512,7 @@ describe("Machine runtime — Service", () => {
     // transitions and only tears down when the machine's scope
     // closes.
     interface ReadyStates {
-      idle: {};
+      idle: undefined;
     }
     interface ReadyContext {
       bootstrappedValue: number;
@@ -518,7 +523,7 @@ describe("Machine runtime — Service", () => {
     class ReadyMachine extends Machine.Service<
       ReadyMachine,
       ReadyStates,
-      {},
+      Record<string, never>,
       ReadyContext,
       ReadyOutput,
       never
@@ -571,10 +576,10 @@ describe("Machine runtime — Service", () => {
 // -----------------------------------------------------------------------------
 
 interface CountUpStates {
-  idle: {};
+  idle: undefined;
 }
 interface CountUpEvents {
-  INC: {};
+  INC: undefined;
 }
 interface CountUpInputs {
   start: number;
@@ -646,7 +651,7 @@ describe("Machine runtime — Factory", () => {
     // each spawn's `ready` runs once, its finalizer tears down when
     // the *spawn's* scope closes — not the layer's.
     interface EphStates {
-      idle: {};
+      idle: undefined;
     }
     interface EphInputs {
       tag: string;
@@ -654,7 +659,7 @@ describe("Machine runtime — Factory", () => {
     class Ephemeral extends Machine.Factory<
       Ephemeral,
       EphStates,
-      {},
+      Record<string, never>,
       EphInputs,
       { tag: string },
       { tag: string },
@@ -726,15 +731,15 @@ describe("Machine runtime — Factory", () => {
 
 describe("Machine runtime — transitionAwait", () => {
   interface WaiterStates {
-    pending: {};
-    done: {};
+    pending: undefined;
+    done: undefined;
   }
   class Waiter extends Machine.Service<
     Waiter,
     WaiterStates,
-    {},
-    {},
-    {},
+    Record<string, never>,
+    Record<string, never>,
+    Record<string, never>,
     never
   >()("Waiter") {}
 
@@ -1058,10 +1063,10 @@ describe("Machine runtime — global `on:` edge cases", () => {
     // ctx.count; the global one adds 1. The per-state handler is
     // the one that should run while in `idle`.
     interface PrecedenceStates {
-      idle: {};
+      idle: undefined;
     }
     interface PrecedenceEvents {
-      BUMP: {};
+      BUMP: undefined;
     }
     interface PrecedenceContext {
       count: number;
@@ -1118,19 +1123,19 @@ describe("Machine runtime — global `on:` edge cases", () => {
     // state scope (firing `transitionAwait`'s unsubscribe), and
     // land in `cancelled` — all without the `go` ever firing.
     interface GuardedStates {
-      waiting: {};
-      done: {};
-      cancelled: {};
+      waiting: undefined;
+      done: undefined;
+      cancelled: undefined;
     }
     interface GuardedEvents {
-      CANCEL: {};
+      CANCEL: undefined;
     }
     class Guarded extends Machine.Service<
       Guarded,
       GuardedStates,
       GuardedEvents,
-      {},
-      {},
+      Record<string, never>,
+      Record<string, never>,
       never
     >()("Guarded") {}
 
@@ -1192,14 +1197,14 @@ describe("Machine runtime — spec-level `catch`", () => {
       readonly cause: string;
     }> {}
     interface S {
-      ready: {};
+      ready: undefined;
     }
     class WithUserError extends Machine.Service<
       WithUserError,
       S,
-      { WRITE: {} },
-      {},
-      {},
+      { WRITE: undefined },
+      Record<string, never>,
+      Record<string, never>,
       never,
       "DbError",
       DbError
@@ -1255,14 +1260,14 @@ describe("Machine runtime — spec-level `catch`", () => {
       readonly field: string;
     }> {}
     interface S {
-      ok: {};
+      ok: undefined;
     }
     class Mixed extends Machine.Service<
       Mixed,
       S,
-      { WRITE: {}; VALIDATE: {} },
-      {},
-      {},
+      { WRITE: undefined; VALIDATE: undefined },
+      Record<string, never>,
+      Record<string, never>,
       never,
       "DbError" | "ValidationError",
       DbError | ValidationError
@@ -1321,14 +1326,14 @@ describe("Machine runtime — spec-level `catch`", () => {
       readonly cause: string;
     }> {}
     interface S {
-      ready: {};
+      ready: undefined;
     }
     class Uncaught extends Machine.Service<
       Uncaught,
       S,
-      { WRITE: {} },
-      {},
-      {},
+      { WRITE: undefined },
+      Record<string, never>,
+      Record<string, never>,
       never,
       never, // CaughtTags empty → nothing absorbed by the machine
       DbError // UserE non-empty → DbError flows on dispatch's channel

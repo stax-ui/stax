@@ -156,12 +156,19 @@ export type UncaughtErrors<
 > = Exclude<UserE, { readonly _tag: CaughtTags }>;
 
 /**
- * `[payload?]` tuple if a state's payload has no keys (`{}`),
+ * `[payload?]` tuple when a state or event carries no payload,
  * `[payload]` tuple otherwise. Lets `self.transition("booting")`
  * skip the payload arg for empty payloads while requiring
  * `self.transition("signedIn", {user})` where user data is needed.
+ *
+ * "No payload" is spelled `undefined` in `States` / `Events` maps —
+ * `@typescript-eslint/no-empty-object-type` flags the historical
+ * `{}` spelling as ambiguous ("any non-nullish"), so machines
+ * written with linting on prefer `undefined`. The legacy
+ * `Record<string, never>` / `{}` shapes still work for backward
+ * compatibility.
  */
-export type PayloadArg<T> = [T] extends [Record<string, never>]
+export type PayloadArg<T> = [T] extends [undefined | Record<string, never>]
   ? [payload?: T]
   : [payload: T];
 
@@ -436,8 +443,12 @@ export type Spec<
   CaughtTags extends string = never,
   UserE extends TaggedError = never,
 > = SpecBase<States, Events, Context, Output, E, R, CaughtTags, UserE> &
+  // `unknown` is the identity for intersection — when `CaughtTags`
+  // is empty we don't layer any extra requirement onto SpecBase.
+  // `{}` would have worked here too, but
+  // `@typescript-eslint/no-empty-object-type` flags it.
   ([CaughtTags] extends [never]
-    ? {}
+    ? unknown
     : {
         /**
          * Spec-level catch handlers, one per user-defined tagged

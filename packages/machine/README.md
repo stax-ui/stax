@@ -69,15 +69,19 @@ Reach for `Machine.Service` when there's logically one of these in your program 
 import { Effect, Layer } from "effect";
 import { Machine } from "@stax-ui/machine";
 
+// `undefined` is the "no payload" spelling for states and events.
+// `{}` works too, but `@typescript-eslint/no-empty-object-type`
+// flags it as ambiguous ("any non-nullish value"), so `undefined`
+// is preferred under default lint settings.
 interface SessionStates {
-  signedOut: {};
+  signedOut: undefined;
   signingIn: { email: string };
   signedIn: { user: User };
 }
 
 interface SessionEvents {
   SIGN_IN: { email: string; password: string };
-  SIGN_OUT: {};
+  SIGN_OUT: undefined;
 }
 
 interface SessionContext {
@@ -163,14 +167,14 @@ Reach for `Machine.Factory` when you need many of them — one per dialog, one p
 
 ```ts
 interface FetcherStates {
-  idle: {};
-  fetching: {};
+  idle: undefined;
+  fetching: undefined;
   loaded: { data: Data };
   failed: { error: FetchError };
 }
 interface FetcherEvents {
-  FETCH: {};
-  RETRY: {};
+  FETCH: undefined;
+  RETRY: undefined;
 }
 interface FetcherContext {
   url: string;
