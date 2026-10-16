@@ -488,7 +488,8 @@ Each notification forks the callback Effect, so a slow callback can't stall subs
 |---|---|---|
 | `UnhandledEvent` | Typed error on `dispatchOrFail` | `dispatchOrFail` called with no matching handler (local or global). |
 | `MalformedSpec` | **Defect** (`Effect.die`) | Transition targets a state name that doesn't exist. The type system rejects this at compile time; landing here at runtime requires `as never` or dynamic key access, so it's treated as a programmer bug. |
-| `MachineUninitialized` | — | Defensive case — `self` methods called before init. Not reachable by construction under the current spec shape. |
+
+"Use `self` before init" is unrepresentable by construction — `self` is only handed to callbacks the runtime invokes post-init (state fns, handlers, `ready`), so there's no `MachineUninitialized` to carry on method signatures or in the exported error set.
 
 User-defined `TaggedError` subclasses declared on the Service/Factory class's `UserE` slot flow on the dispatch channel for the caller to handle inline. Tags listed in `CaughtTags` are absorbed by the machine's `catch` block instead — see the ["Spec-level `catch`"](#spec-level-catch--absorb-user-errors-at-the-machine-not-at-every-call-site) section.
 

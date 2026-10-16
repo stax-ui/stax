@@ -97,8 +97,8 @@ self.transition("signedIn", { user: { id: "u1", name: "n" }, bogus: 1 });
 
 // self.assign has an empty error channel — self is only handed to
 // runtime-invoked callbacks (state fns, handlers, `ready`), which
-// only run post-init. The MachineUninitialized case is
-// unreachable by construction, so it doesn't pollute the type.
+// only run post-init, so "use self before init" is unrepresentable
+// by construction and doesn't pollute the type.
 
 // Partial patch — subset of context fields.
 const _a1: Effect.Effect<void> = self.assign({ user: null });

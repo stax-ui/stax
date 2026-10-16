@@ -261,11 +261,7 @@ export type {
   Transition,
 } from "./types.js";
 
-export {
-  MachineUninitialized,
-  MalformedSpec,
-  UnhandledEvent,
-} from "./types.js";
+export { MalformedSpec, UnhandledEvent } from "./types.js";
 
 // =============================================================================
 // Class-based declaration
@@ -462,7 +458,7 @@ export const Factory =
  * return the spec. `self` is NOT in scope here; it's handed to each
  * state fn as `(self, payload)`, to each spec-level `on:` handler
  * as `(self, payload)`, and to the `ready` hook as `(self)`. That
- * placement makes `MachineUninitialized` unrepresentable by
+ * placement makes "use `self` before init" unrepresentable by
  * construction — `self` can't even be named before init.
  *
  * ```ts

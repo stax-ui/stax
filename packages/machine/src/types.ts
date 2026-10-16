@@ -71,27 +71,6 @@ export class MalformedSpec extends Data.TaggedError("MalformedSpec")<{
   readonly state?: string;
 }> {}
 
-/**
- * Failure raised if `self.assign` / `self.dispatch` /
- * `self.dispatchOrFail` is called before the machine's runtime has
- * finished initializing. Under the current spec shape this is
- * unreachable by construction — `self` is only handed to
- * runtime-invoked callbacks (state fns, handlers, `ready`), all of
- * which run post-init. Kept as a defensive-case type for anyone
- * smuggling `self` out of its intended scope (e.g., stashing it
- * in a module-level Ref and calling it from an unrelated fiber)
- * and for future spec shapes that might make it reachable again.
- *
- * Not present in the common error channels of `MachineSelf`
- * methods — the runtime doesn't wrap the impls in a guard, since
- * the type shape guarantees safety.
- */
-export class MachineUninitialized extends Data.TaggedError(
-  "MachineUninitialized",
-)<{
-  readonly operation: string;
-}> {}
-
 // =============================================================================
 // Error catching
 // =============================================================================
