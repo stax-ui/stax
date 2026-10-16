@@ -394,4 +394,69 @@ describe("SSR", () => {
       expect(html).not.toContain("opacity-0");
     });
   });
+
+  describe("hydration ID counter", () => {
+    // Each renderToString call must start its hydration-id counter at
+    // zero. Historically this counter was module-level and only grew,
+    // which meant sequential requests in a long-running SSR server
+    // produced IDs like `stax-123` on the first control of request 51,
+    // defeating any ID-based hydration lookup.
+    const idsIn = (html: string): string[] => {
+      const matches = html.matchAll(/data-stax-id="([^"]+)"/g);
+      return Array.from(matches, (m) => m[1]);
+    };
+
+    const renderPage = () =>
+      Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const visible = yield* Signal.make(true);
+            return yield* renderToString(
+              when(visible, {
+                onTrue: () => $.div({}, "yes"),
+                onFalse: () => $.div({}, "no"),
+              }),
+            );
+          }),
+        ),
+      );
+
+    it("starts at stax-1 on every renderToString call", async () => {
+      const htmlA = await renderPage();
+      const htmlB = await renderPage();
+
+      expect(idsIn(htmlA)).toContain("stax-1");
+      expect(idsIn(htmlB)).toContain("stax-1");
+      // Both pages are identical; their ID sets must match exactly.
+      expect(idsIn(htmlA)).toEqual(idsIn(htmlB));
+    });
+
+    it("issues sequential IDs within one renderToString call", async () => {
+      // Two sibling controls → stax-1 and stax-2 in source order.
+      const html = await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const a = yield* Signal.make(true);
+            const b = yield* Signal.make(true);
+            return yield* renderToString(
+              $.div(
+                {},
+                when(a, {
+                  onTrue: () => $.span({}, "A"),
+                  onFalse: () => $.span({}, "a"),
+                }),
+                when(b, {
+                  onTrue: () => $.span({}, "B"),
+                  onFalse: () => $.span({}, "b"),
+                }),
+              ),
+            );
+          }),
+        ),
+      );
+
+      const ids = idsIn(html);
+      expect(ids).toEqual(["stax-1", "stax-2"]);
+    });
+  });
 });

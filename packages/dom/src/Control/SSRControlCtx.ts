@@ -24,29 +24,56 @@ interface DOMSlotEntry extends SlotEntry<DOMElement> {
   readonly index: Signal.Signal<number>;
 }
 
-let ssrIdCounter = 0;
+/**
+ * Factory for `stax-N` IDs. Each `renderToString` call gets its own
+ * counter via `makeSSRControlCtx` (below), so hydration IDs start at
+ * `stax-1` for every request. Historically this counter was
+ * module-level and only grew; across requests in a long-running SSR
+ * server, that produced IDs like `stax-123` on the first control of
+ * request 51, which made ID-based hydration lookup impossible.
+ */
+type IdFactory = () => string;
+
+const makeIdFactory = (): IdFactory => {
+  let counter = 0;
+  return () => `stax-${++counter}`;
+};
 
 /**
  * Creates a fresh SSR control context with isolated state.
  * Each context has its own containerElement, slots Map, and hydration ID.
+ *
+ * The `nextId` factory is shared across every fork within one
+ * `renderToString` call so IDs form a single increasing sequence —
+ * the same sequence hydration regenerates on the client to pair
+ * SSR output with client-side control instances.
  */
-const createSSRControlCtx = (): IControlCtx<DOMElement> => {
+const createSSRControlCtx = (nextId: IdFactory): IControlCtx<DOMElement> => {
   // Fresh state per context instance
   const slots = new Map<string, DOMSlotEntry>();
   let containerElement: DOMElement | null = null;
-  const hydrationId = `stax-${++ssrIdCounter}`;
+  // Resolve the hydration ID lazily so the root ctx (which forks but
+  // never calls getContainer) doesn't consume a counter slot. First
+  // call to defaultContainer or getContainer fixes the ID; subsequent
+  // calls on the same ctx reuse it.
+  let hydrationId: string | null = null;
+  const resolveHydrationId = (): string => (hydrationId ??= nextId());
 
   const defaultContainer: Element.Element<DOMElement, never, never> =
     Effect.gen(function* () {
       const renderer = yield* RendererContext;
       const container = yield* renderer.createNode("div");
       yield* renderer.setStyleProperty(container, "display", "contents");
-      yield* renderer.setAttribute(container, "data-stax-id", hydrationId);
+      yield* renderer.setAttribute(
+        container,
+        "data-stax-id",
+        resolveHydrationId(),
+      );
       return container as DOMElement;
     });
 
   const ctx: IControlCtx<DOMElement> = {
-    fork: () => Effect.succeed(createSSRControlCtx()),
+    fork: () => Effect.succeed(createSSRControlCtx(nextId)),
 
     defaultContainer,
 
@@ -59,7 +86,11 @@ const createSSRControlCtx = (): IControlCtx<DOMElement> => {
         const container = create
           ? yield* create()
           : yield* defaultContainer as Element.Element<DOMElement, E, R>;
-        yield* renderer.setAttribute(container, "data-stax-id", hydrationId);
+        yield* renderer.setAttribute(
+          container,
+          "data-stax-id",
+          resolveHydrationId(),
+        );
         containerElement = container;
         return container;
       }) as Element.Element<DOMElement, E, R>,
@@ -152,8 +183,14 @@ const createSSRControlCtx = (): IControlCtx<DOMElement> => {
 /**
  * SSR ControlCtx implementation.
  * Renders once with hydration markers, no subscriptions or animations.
+ *
+ * `Effect.sync` (not `Effect.succeed`) so the id-factory is created at
+ * layer-build time, not at module import. Each `Effect.provide` that
+ * builds a fresh layer gets its own counter starting at zero.
  */
 export const SSRControlCtx: Layer.Layer<ControlCtx> = Layer.effect(
   ControlCtx,
-  Effect.succeed(createSSRControlCtx() as IControlCtx<unknown>),
+  Effect.sync(
+    () => createSSRControlCtx(makeIdFactory()) as IControlCtx<unknown>,
+  ),
 );
