@@ -322,6 +322,36 @@ export const createHydrationRenderer = (
         parentStack.push({ parent: node, childIndex: 0 });
       }),
 
+    enterPreresolvedNode: (node: Node) =>
+      Effect.sync(() => {
+        // Fast path for ID-based container lookup: given a node resolved
+        // via the hydration pre-index, do two things atomically:
+        //   1. Advance the current parent's cursor past `node` so sibling
+        //      lookups resume after it.
+        //   2. Push `node` as a new parent frame so subsequent child
+        //      lookups walk inside it.
+        //
+        // Replaces the `createNode(type) + pushHydrationParent(container)`
+        // pair that the slow (positional-walk) path uses. The caller
+        // already knows which node to use, so there's no sibling scan.
+        const ctx = getCurrentContext();
+        const children = ctx.parent.childNodes;
+        // Scan forward from the cursor to locate `node`. In well-formed
+        // SSR, `node` is at or just past the current index — but there
+        // may be whitespace or comment siblings between the cursor and
+        // the target node that we need to step over. If we reach the
+        // end without finding `node`, treat it as a mismatch: leave the
+        // cursor alone (callers can fall back) but still push the node
+        // so children can hydrate against it.
+        for (let i = ctx.childIndex; i < children.length; i++) {
+          if (children[i] === node) {
+            ctx.childIndex = i + 1;
+            break;
+          }
+        }
+        parentStack.push({ parent: node, childIndex: 0 });
+      }),
+
     createSlot: () =>
       Effect.sync((): Slot<Node> => {
         const ctx = getCurrentContext();

@@ -213,6 +213,27 @@ export interface Renderer<Node> {
   readonly pushHydrationParent: (node: Node) => Effect.Effect<void>;
 
   /**
+   * Hydration fast path: given a pre-resolved node (e.g. looked up in
+   * `O(1)` from the hydration-id pre-index), advance the walker as if
+   * `createNode` had just found it, then push it as a new parent frame
+   * for subsequent child walking.
+   *
+   * Combines two operations atomically: scan forward in the current
+   * parent's children until we hit the given node (so sibling lookups
+   * resume after it), then push it onto the parent stack. Replaces the
+   * `createNode(type) + pushHydrationParent(container)` pair used by the
+   * slow (positional-walking) path.
+   *
+   * No-op on renderers that don't maintain a traversal stack. If the
+   * node is not found at or after the current parent cursor, the walker
+   * is unchanged — callers should treat that as a hydration mismatch
+   * and fall back to the slow path.
+   *
+   * Pair with `finalizeNode(node)` to pop, same as `createNode`.
+   */
+  readonly enterPreresolvedNode: (node: Node) => Effect.Effect<void>;
+
+  /**
    * Create a slot for swappable content.
    * Used by Boundary.suspense to swap fallback with actual content.
    * Returns a Slot with a marker node and methods to set/clear content.

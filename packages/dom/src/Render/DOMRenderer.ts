@@ -136,6 +136,8 @@ export const DOMRenderer: Renderer<Node> = {
 
   pushHydrationParent: () => Effect.void,
 
+  enterPreresolvedNode: () => Effect.void,
+
   createSlot: () =>
     Effect.sync((): Slot<Node> => {
       // Use a fragment to hold marker and initial content before DOM insertion

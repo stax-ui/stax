@@ -213,6 +213,8 @@ export const StringRenderer: Renderer<VNode> = {
 
   pushHydrationParent: () => Effect.void,
 
+  enterPreresolvedNode: () => Effect.void,
+
   createSlot: () =>
     Effect.sync((): Slot<VNode> => {
       const marker = vComment("stax-slot");

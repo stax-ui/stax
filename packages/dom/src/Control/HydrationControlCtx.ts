@@ -3,7 +3,7 @@
  * Finds existing DOM and attaches handlers, then subscribes like client mode.
  */
 
-import { Context, Effect, Layer, Scope } from "effect";
+import { Context, Effect, Layer, Option, Scope } from "effect";
 
 import {
   ControlCtx,
@@ -16,6 +16,7 @@ import {
 
 import * as Element from "../Element/index.js";
 import { DOMRenderer } from "../Render/DOMRenderer.js";
+import { HydrationContext } from "../Render/hydrate/HydrationContext.js";
 import {
   applyPreInsertEnterFrom,
   captureSlotRects,
@@ -92,6 +93,34 @@ const createClientLikeControlCtx = (
         if (!capturedRenderer) {
           capturedRenderer = yield* RendererContext;
         }
+
+        // Fast path: pre-indexed ID lookup.
+        //
+        // During hydration, HydrationContext.nextControlId issues
+        // `stax-1, stax-2, …` in the same order SSR did, and
+        // `findById` reads from a Map<id, Element> pre-populated at
+        // hydrate() entry — O(1) per lookup.
+        //
+        // Only applied when (a) we're still hydrating, (b) the user
+        // didn't supply a custom `container` factory (that path
+        // continues to use positional walking so user-supplied
+        // elements don't need a `data-stax-id`), and (c) the ID
+        // resolves in the pre-index. Any miss falls through to the
+        // slow (positional-walk) path for safe degradation.
+        if (!hydrationDone && !create) {
+          const hcOpt = yield* Effect.serviceOption(HydrationContext);
+          if (Option.isSome(hcOpt)) {
+            const expectedId = yield* hcOpt.value.nextControlId;
+            const resolved = yield* hcOpt.value.findById(expectedId);
+            if (resolved) {
+              yield* capturedRenderer.enterPreresolvedNode(resolved);
+              containerElement = resolved as DOMElement;
+              return containerElement;
+            }
+          }
+        }
+
+        // Slow path: positional walking.
         const container = create
           ? yield* create()
           : yield* defaultContainer as Element.Element<DOMElement, E, R>;
