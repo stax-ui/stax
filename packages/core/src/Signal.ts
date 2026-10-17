@@ -18,6 +18,7 @@ import {
   type SignalArray as SignalArrayType,
 } from "./SignalArray.js";
 import { SignalMap, type SignalMap as SignalMapType } from "./SignalMap.js";
+import { Optic as SignalOptic } from "./SignalOptic.js";
 import { SignalSet, type SignalSet as SignalSetType } from "./SignalSet.js";
 import {
   SignalStruct,
@@ -426,6 +427,13 @@ export const Signal = {
    * @see SignalStruct
    */
   Struct: SignalStruct,
+  /**
+   * Lens-projected root over a deeply nested value. Hands out
+   * fine-grained `Readable`s for arbitrary sub-paths and routes all
+   * writes through `Signal.Optic.set` / `Signal.Optic.update`.
+   * @see SignalOptic
+   */
+  Optic: SignalOptic,
 };
 
 // Re-export types for convenience
