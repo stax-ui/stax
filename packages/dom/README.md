@@ -481,6 +481,49 @@ yield* el.pipe(Element.bindTextContent(textReadable));
 yield* el.pipe(Element.bindInputValue(valueReadable));
 ```
 
+### Visibility
+
+```ts
+const open = yield* Signal.make(false);
+
+yield* $.div({ class: "panel" }, ...content).pipe(
+  Element.bindVisible(open, {
+    animate: {
+      enterFrom: "opacity-0 transition-opacity duration-150",
+      enter: "!opacity-100",
+      exit: "transition-opacity duration-150",
+      exitTo: "!opacity-0",
+    },
+  }),
+);
+```
+
+Toggles the `hidden` attribute on a reactive boolean, running enter/exit animations around the switch. The element stays mounted the whole time — scroll position, form state, focus returns, SEO content and `hidden="until-found"` all survive, which is what makes this different from `when`:
+
+| | `when` | `bindVisible` |
+|---|---|---|
+| Element lifecycle | unmounts when false | always mounted |
+| DOM state (scroll, inputs, focus) | lost on toggle | preserved |
+| SEO / find-in-page | hidden branch not indexed | content stays searchable |
+| Default | one logical state at a time | stays-mounted hidden state |
+
+By default `bindVisible` writes an inline `display: none !important` alongside the `hidden` attribute, so Tailwind utilities like `display: flex` don't override the UA's `[hidden] { display: none }` rule. Opt out with `manageDisplay: false` if you want to control `display` yourself.
+
+#### `hidden="until-found"`
+
+For find-in-page revealing, pass `hiddenValue: "until-found"` and listen for the `beforematch` event:
+
+```ts
+const open = yield* Signal.make(false);
+
+yield* $.section({}, longFormContent).pipe(
+  Element.on("beforematch", () => open.set(true)),
+  Element.bindVisible(open, { hiddenValue: "until-found" }),
+);
+```
+
+The browser removes `hidden` and scrolls to the matched content before firing `beforematch`. When your handler flips `open` to true, `bindVisible` detects the browser-driven reveal (hidden is already gone) and skips the enter animation so the scroll-to isn't interrupted.
+
 ### Focus & Interaction
 
 ```ts

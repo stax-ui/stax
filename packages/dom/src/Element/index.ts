@@ -28,6 +28,11 @@ export {
 } from "./ref.js";
 
 export * from "./core.js";
+export {
+  bindVisible,
+  type BindVisibleOptions,
+  type HiddenValue,
+} from "./bindVisible.js";
 export type {
   Child,
   ChildInput,
