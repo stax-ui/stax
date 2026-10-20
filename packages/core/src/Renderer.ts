@@ -58,6 +58,22 @@ export interface Renderer<Node> {
   readonly createTextNode: (text: string) => Effect.Effect<Node>;
 
   /**
+   * Create a comment node with the given content. Used by sentinel-anchored
+   * control-flow containers to delimit the group of slot nodes they manage.
+   * Non-DOM renderers (SSR) produce a comment vnode that serializes to
+   * `<!--content-->`.
+   */
+  readonly createComment: (content: string) => Effect.Effect<Node>;
+
+  /**
+   * Create an empty fragment node. Appending a fragment to a parent flattens
+   * its children into the parent (DOM semantics); SSR mirrors this via
+   * `VFragment`. Used by control-flow containers to return a sentinel-wrapped
+   * slot group without introducing a wrapper element in the output.
+   */
+  readonly createFragment: () => Effect.Effect<Node>;
+
+  /**
    * Append a child node to a parent node.
    */
   readonly appendChild: (parent: Node, child: Node) => Effect.Effect<void>;

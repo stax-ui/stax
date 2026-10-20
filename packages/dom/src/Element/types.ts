@@ -7,24 +7,37 @@ import { Readable, RendererContext } from "@stax-ui/core";
 // =============================================================================
 
 /**
- * An Element is an Effect that produces an HTML or SVG element.
- * All Element operations are effectful and go through the Renderer.
+ * An Element is an Effect that produces an HTML, SVG, or DocumentFragment
+ * node. All Element operations are effectful and go through the Renderer.
+ *
+ * `DocumentFragment` is admitted so control-flow functions can return a
+ * sentinel-wrapped slot group (`<!--$stax-N-->…slots…<!--/$stax-N-->`
+ * inlined into the parent on `appendChild`) instead of a wrapper element.
+ * `$.div(...)` and friends still return `Element<HTMLDivElement>`, so
+ * downstream code that depends on narrow element types (refs, attribute
+ * helpers, bounding-rect reads) is unaffected.
  */
 export type Element<
-  A extends HTMLElement | SVGElement = HTMLElement | SVGElement,
+  A extends HTMLElement | SVGElement | DocumentFragment =
+    HTMLElement | SVGElement | DocumentFragment,
   E = never,
   R = never,
 > = Effect.Effect<A, E, Scope.Scope | RendererContext | R>;
 
 /**
- * A child that can be appended to an element.
+ * A child that can be appended to an element. `DocumentFragment` and
+ * `Comment` are included so a control-flow function's return value (which
+ * may be a fragment, and whose sentinels are comments) flows through
+ * `$.div(..., when(...))` without needing a cast at the call site.
  */
 export type ChildNode =
   | string
   | number
   | Readable.Readable<string | number>
   | HTMLElement
-  | SVGElement;
+  | SVGElement
+  | DocumentFragment
+  | Comment;
 
 /**
  * An effectful child producer.

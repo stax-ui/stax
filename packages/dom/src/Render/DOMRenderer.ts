@@ -29,6 +29,11 @@ export const DOMRenderer: Renderer<Node> = {
   createTextNode: (text: string) =>
     Effect.sync(() => document.createTextNode(text)),
 
+  createComment: (content: string) =>
+    Effect.sync(() => document.createComment(content)),
+
+  createFragment: () => Effect.sync(() => document.createDocumentFragment()),
+
   appendChild: (parent: Node, child: Node) =>
     Effect.gen(function* () {
       yield* warnIfInvalidNesting(tagNameOf(parent), tagNameOf(child));

@@ -112,6 +112,11 @@ export const createHydrationRenderer = (
         return node;
       }),
 
+    createComment: (content: string) =>
+      Effect.sync(() => document.createComment(content)),
+
+    createFragment: () => Effect.sync(() => document.createDocumentFragment()),
+
     createTextNode: (text: string) =>
       Effect.sync(() => {
         const ctx = getCurrentContext();
