@@ -143,6 +143,10 @@ export const DOMRenderer: Renderer<Node> = {
 
   enterPreresolvedNode: () => Effect.void,
 
+  enterSentinelAnchor: () => Effect.void,
+
+  exitSentinelAnchor: () => Effect.void,
+
   createSlot: () =>
     Effect.sync((): Slot<Node> => {
       // Use a fragment to hold marker and initial content before DOM insertion

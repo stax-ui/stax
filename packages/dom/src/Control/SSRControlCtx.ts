@@ -17,6 +17,13 @@ import type { AnimationOptions } from "../Animation/index.js";
 import * as Element from "../Element/index.js";
 import { AnimationConfigCtx } from "./AnimationConfigCtx.js";
 
+/**
+ * The ctx-level element type. Kept narrow — slot elements are always
+ * real DOM elements. `getContainer`'s default-sentinel path returns a
+ * VFragment at runtime; the type still says `DOMElement` because the
+ * result is only ever passed to the parent's `appendChild` (which
+ * accepts both) and never inspected as an element downstream.
+ */
 type DOMElement = HTMLElement | SVGElement;
 
 interface DOMSlotEntry extends SlotEntry<DOMElement> {
@@ -40,8 +47,24 @@ const makeIdFactory = (): IdFactory => {
 };
 
 /**
+ * What a ctx tracks after `getContainer` runs. User-supplied containers
+ * stay element-shaped (so SSR output and hydration lookup match the
+ * old wrapper flow one-for-one). The default path tracks a sentinel
+ * pair instead, with slots inserted into the fragment before the end
+ * sentinel.
+ */
+type ControlAnchor =
+  | { readonly kind: "element"; readonly element: HTMLElement | SVGElement }
+  | {
+      readonly kind: "sentinels";
+      readonly fragment: DocumentFragment;
+      readonly start: Comment;
+      readonly end: Comment;
+    };
+
+/**
  * Creates a fresh SSR control context with isolated state.
- * Each context has its own containerElement, slots Map, and hydration ID.
+ * Each context has its own anchor, slots Map, and hydration ID.
  *
  * The `nextId` factory is shared across every fork within one
  * `renderToString` call so IDs form a single increasing sequence —
@@ -51,7 +74,7 @@ const makeIdFactory = (): IdFactory => {
 const createSSRControlCtx = (nextId: IdFactory): IControlCtx<DOMElement> => {
   // Fresh state per context instance
   const slots = new Map<string, DOMSlotEntry>();
-  let containerElement: DOMElement | null = null;
+  let anchor: ControlAnchor | null = null;
   // Resolve the hydration ID lazily so the root ctx (which forks but
   // never calls getContainer) doesn't consume a counter slot. First
   // call to defaultContainer or getContainer fixes the ID; subsequent
@@ -59,17 +82,27 @@ const createSSRControlCtx = (nextId: IdFactory): IControlCtx<DOMElement> => {
   let hydrationId: string | null = null;
   const resolveHydrationId = (): string => (hydrationId ??= nextId());
 
+  /**
+   * The default sentinel-wrapped container. Emits a VFragment carrying
+   * `[VComment("$stax-N"), VComment("/stax-N")]` — the parent's
+   * `appendChild` flattens these into itself, so the SSR output is
+   * two comment siblings around the slot elements (no wrapper div).
+   */
   const defaultContainer: Element.Element<DOMElement, never, never> =
     Effect.gen(function* () {
       const renderer = yield* RendererContext;
-      const container = yield* renderer.createNode("div");
-      yield* renderer.setStyleProperty(container, "display", "contents");
-      yield* renderer.setAttribute(
-        container,
-        "data-stax-id",
-        resolveHydrationId(),
-      );
-      return container as DOMElement;
+      const id = resolveHydrationId();
+      const fragment = (yield* renderer.createFragment()) as DocumentFragment;
+      const start = (yield* renderer.createComment(`$${id}`)) as Comment;
+      const end = (yield* renderer.createComment(`/${id}`)) as Comment;
+      yield* renderer.appendChild(fragment, start);
+      yield* renderer.appendChild(fragment, end);
+      anchor = { kind: "sentinels", fragment, start, end };
+      // Fragment flows out as the "container" handle; it only gets
+      // passed to the parent's appendChild (which flattens it in).
+      // Downstream code never inspects it as an element, so the cast
+      // is a contained type lie — see the DOMElement note at the top.
+      return fragment as unknown as DOMElement;
     });
 
   const ctx: IControlCtx<DOMElement> = {
@@ -81,18 +114,21 @@ const createSSRControlCtx = (nextId: IdFactory): IControlCtx<DOMElement> => {
       create?: () => Element.Element<DOMElement, E, R>,
     ): Element.Element<DOMElement, E, R> =>
       Effect.gen(function* () {
-        if (containerElement) return containerElement;
+        if (anchor) {
+          return anchor.kind === "element" ? anchor.element : anchor.fragment;
+        }
+        if (!create) {
+          return yield* defaultContainer as Element.Element<DOMElement, E, R>;
+        }
         const renderer = yield* RendererContext;
-        const container = create
-          ? yield* create()
-          : yield* defaultContainer as Element.Element<DOMElement, E, R>;
+        const element = (yield* create()) as HTMLElement | SVGElement;
         yield* renderer.setAttribute(
-          container,
+          element,
           "data-stax-id",
           resolveHydrationId(),
         );
-        containerElement = container;
-        return container;
+        anchor = { kind: "element", element };
+        return element;
       }) as Element.Element<DOMElement, E, R>,
 
     addSlot: <E, R>(
@@ -120,7 +156,7 @@ const createSSRControlCtx = (nextId: IdFactory): IControlCtx<DOMElement> => {
 
         const element = (yield* render({ item, index }).pipe(
           Effect.provideService(Scope.Scope, slotScope),
-        )) as DOMElement;
+        )) as HTMLElement | SVGElement;
 
         yield* renderer.setAttribute(element, "data-stax-key", key);
 
@@ -143,13 +179,15 @@ const createSSRControlCtx = (nextId: IdFactory): IControlCtx<DOMElement> => {
           }
         }
 
-        if (containerElement) {
-          yield* renderer.appendChild(containerElement, element);
+        if (anchor?.kind === "element") {
+          yield* renderer.appendChild(anchor.element, element);
+        } else if (anchor?.kind === "sentinels") {
+          yield* renderer.insertBefore(anchor.fragment, element, anchor.end);
         }
 
         const entry: DOMSlotEntry = {
           key,
-          element,
+          element: element as DOMElement,
           scope: slotScope,
           item,
           index,

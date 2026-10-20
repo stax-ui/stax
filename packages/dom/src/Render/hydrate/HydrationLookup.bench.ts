@@ -128,7 +128,7 @@ const resolveAllPreIndex = (
   const index = buildHydrationIndex(root);
   let count = 0;
   for (const id of ids) {
-    if (index.has(id)) count++;
+    if (index.elements.has(id) || index.sentinels.has(id)) count++;
   }
   return count;
 };

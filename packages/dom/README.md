@@ -404,6 +404,32 @@ hydrate(App(), document.getElementById("root")!, {
 
 Hydration attaches to server-rendered HTML and sets up reactive bindings without re-rendering the DOM. The component tree must match what was rendered on the server.
 
+#### HTML minification
+
+Control-flow containers (`when`, `each`, `match`, `redraw`, `animated`) emit paired comment sentinels into the SSR output:
+
+```html
+<ul>
+  <!--$stax-1-->
+  <li data-stax-key="todo-1">...</li>
+  <li data-stax-key="todo-2">...</li>
+  <!--/stax-1-->
+</ul>
+```
+
+Hydration locates each control by matching the start comment via `data-stax-id`-equivalent lookup, then walks forward to its matching end comment. If your pipeline minifies HTML and strips comments, hydration can't find the sentinel ranges — the control fails over to positional walking (slower, and brittle under whitespace differences).
+
+Tell your minifier to preserve `stax-*` comments. For `html-minifier` / `html-minifier-terser`:
+
+```ts
+minify(html, {
+  removeComments: true,
+  ignoreCustomComments: [/^\/?\$?stax-/],
+});
+```
+
+Suspense boundaries and user-supplied control containers (`container: () => $.ul(...)`) keep using `data-stax-id` attributes on their wrapper elements, so they're unaffected by comment stripping.
+
 ## Element Manipulation
 
 The `Element` namespace provides pipeable functions for imperative DOM manipulation. These are useful for refs and one-off operations:

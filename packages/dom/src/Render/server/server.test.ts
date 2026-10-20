@@ -72,7 +72,7 @@ describe("SSR", () => {
         ),
       );
 
-      expect(html).toContain("data-stax-id=");
+      expect(html).toMatch(/<!--\$stax-\d+-->/);
       expect(html).toContain('data-stax-key="true"');
       expect(html).toContain("Visible");
       expect(html).not.toContain("Hidden");
@@ -126,7 +126,7 @@ describe("SSR", () => {
         ),
       );
 
-      expect(html).toContain("data-stax-id=");
+      expect(html).toMatch(/<!--\$stax-\d+-->/);
       expect(html).toContain('data-stax-key="loading"');
       expect(html).toContain("Loading...");
     });
@@ -207,7 +207,7 @@ describe("SSR", () => {
         ),
       );
 
-      expect(html).toContain("data-stax-id=");
+      expect(html).toMatch(/<!--\$stax-\d+-->/);
       expect(html).not.toContain("<li");
     });
   });
@@ -402,8 +402,19 @@ describe("SSR", () => {
     // produced IDs like `stax-123` on the first control of request 51,
     // defeating any ID-based hydration lookup.
     const idsIn = (html: string): string[] => {
-      const matches = html.matchAll(/data-stax-id="([^"]+)"/g);
-      return Array.from(matches, (m) => m[1]);
+      // Default-container controls land as `<!--$stax-N-->` sentinels;
+      // user-container controls still carry `data-stax-id="stax-N"` on
+      // their element. Collect both so the ID counter test works
+      // regardless of which mode a given control is in.
+      const sentinels = Array.from(
+        html.matchAll(/<!--\$(stax-\d+)-->/g),
+        (m) => m[1],
+      );
+      const attrs = Array.from(
+        html.matchAll(/data-stax-id="(stax-\d+)"/g),
+        (m) => m[1],
+      );
+      return [...sentinels, ...attrs];
     };
 
     const renderPage = () =>

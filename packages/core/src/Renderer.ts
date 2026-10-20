@@ -250,6 +250,32 @@ export interface Renderer<Node> {
   readonly enterPreresolvedNode: (node: Node) => Effect.Effect<void>;
 
   /**
+   * Hydration fast path for sentinel-anchored control containers.
+   * Advance the current parent cursor past `start` (a `<!--$stax-N-->`
+   * comment resolved via the pre-index) without pushing a new parent
+   * frame — the slots of a sentinel-anchored control are *siblings*
+   * of the sentinel pair, not children, so slot renders should keep
+   * walking in the same parent context.
+   *
+   * Pair with `exitSentinelAnchor(end)` at the end of the control's
+   * initial sync to skip the walker cursor past the end sentinel so
+   * surrounding siblings resume walking from the right position.
+   *
+   * No-op on renderers that don't maintain a traversal stack.
+   */
+  readonly enterSentinelAnchor: (start: Node) => Effect.Effect<void>;
+
+  /**
+   * Hydration fast path for sentinel-anchored control containers.
+   * Advance the current parent cursor past `end` (a `<!--/stax-N-->`
+   * comment) so sibling walking resumes after the control's slot
+   * group. Pair with a preceding `enterSentinelAnchor(start)`.
+   *
+   * No-op on renderers that don't maintain a traversal stack.
+   */
+  readonly exitSentinelAnchor: (end: Node) => Effect.Effect<void>;
+
+  /**
    * Create a slot for swappable content.
    * Used by Boundary.suspense to swap fallback with actual content.
    * Returns a Slot with a marker node and methods to set/clear content.

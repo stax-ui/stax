@@ -357,6 +357,44 @@ export const createHydrationRenderer = (
         parentStack.push({ parent: node, childIndex: 0 });
       }),
 
+    enterSentinelAnchor: (start: Node) =>
+      Effect.sync(() => {
+        // Sentinel-anchored control: `start` is the `<!--$stax-N-->`
+        // comment, resolved via the hydration pre-index. The slots this
+        // control manages are *siblings* of the sentinel (not children),
+        // so just advance the current parent's cursor past `start` and
+        // leave the stack where it is. Subsequent createNode calls from
+        // the control's slot renders scan forward in the same frame and
+        // find the slot elements between `start` and the matching end.
+        const ctx = getCurrentContext();
+        const children = ctx.parent.childNodes;
+        for (let i = ctx.childIndex; i < children.length; i++) {
+          if (children[i] === start) {
+            ctx.childIndex = i + 1;
+            return;
+          }
+        }
+        // Mismatch — cursor already past where the sentinel should be.
+        // The surrounding control's addSlot renders will fall back to
+        // mismatch recovery (createNode's createElement path).
+      }),
+
+    exitSentinelAnchor: (end: Node) =>
+      Effect.sync(() => {
+        // Advance the current parent cursor past the end sentinel so
+        // surrounding siblings resume walking from the correct position.
+        // Paired with `enterSentinelAnchor(start)` at the start of the
+        // control's initial sync.
+        const ctx = getCurrentContext();
+        const children = ctx.parent.childNodes;
+        for (let i = ctx.childIndex; i < children.length; i++) {
+          if (children[i] === end) {
+            ctx.childIndex = i + 1;
+            return;
+          }
+        }
+      }),
+
     createSlot: () =>
       Effect.sync((): Slot<Node> => {
         const ctx = getCurrentContext();

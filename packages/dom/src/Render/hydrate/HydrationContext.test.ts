@@ -22,10 +22,13 @@ describe("HydrationContext", () => {
 
       const index = buildHydrationIndex(root);
 
-      expect(index.size).toBe(3);
-      expect(index.get("stax-1")?.classList.contains("a")).toBe(true);
-      expect(index.get("stax-2")?.classList.contains("b")).toBe(true);
-      expect(index.get("stax-3")?.classList.contains("nested")).toBe(true);
+      expect(index.elements.size).toBe(3);
+      expect(index.sentinels.size).toBe(0);
+      expect(index.elements.get("stax-1")?.classList.contains("a")).toBe(true);
+      expect(index.elements.get("stax-2")?.classList.contains("b")).toBe(true);
+      expect(index.elements.get("stax-3")?.classList.contains("nested")).toBe(
+        true,
+      );
     });
 
     it("includes the root itself when it carries data-stax-id", () => {
@@ -35,17 +38,43 @@ describe("HydrationContext", () => {
 
       const index = buildHydrationIndex(root);
 
-      expect(index.size).toBe(2);
-      expect(index.get("stax-root")).toBe(root);
+      expect(index.elements.size).toBe(2);
+      expect(index.elements.get("stax-root")).toBe(root);
     });
 
-    it("returns an empty map when there are no hydration markers", () => {
+    it("returns empty maps when there are no hydration markers", () => {
       const root = document.createElement("div");
       root.innerHTML = `<p>static</p><ul><li></li></ul>`;
 
       const index = buildHydrationIndex(root);
 
-      expect(index.size).toBe(0);
+      expect(index.elements.size).toBe(0);
+      expect(index.sentinels.size).toBe(0);
+    });
+
+    it("indexes `<!--$stax-N-->` sentinel comments under the root", () => {
+      // Approximates SSR output for two default-container controls: a
+      // sibling pair of sentinel ranges nested inside a <ul>.
+      const root = document.createElement("div");
+      const ul = document.createElement("ul");
+      root.appendChild(ul);
+      ul.appendChild(document.createComment("$stax-1"));
+      ul.appendChild(document.createElement("li"));
+      ul.appendChild(document.createComment("/stax-1"));
+      ul.appendChild(document.createComment("$stax-2"));
+      ul.appendChild(document.createElement("li"));
+      ul.appendChild(document.createComment("/stax-2"));
+
+      const index = buildHydrationIndex(root);
+
+      expect(index.sentinels.size).toBe(2);
+      expect(index.sentinels.get("stax-1")?.data).toBe("$stax-1");
+      expect(index.sentinels.get("stax-2")?.data).toBe("$stax-2");
+      // End sentinels and non-stax `$` comments are not indexed.
+      ul.appendChild(document.createComment("$other"));
+      ul.appendChild(document.createComment("/stax-3"));
+      const index2 = buildHydrationIndex(root);
+      expect(index2.sentinels.size).toBe(2);
     });
   });
 

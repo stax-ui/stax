@@ -262,7 +262,9 @@ describe("Hydration", () => {
       const html = await Effect.runPromise(renderToString(App()));
       container.innerHTML = html;
 
-      // Should have stax-id markers for control flow containers
+      // Control-flow containers emit sentinel comments; Suspense
+      // keeps its wrapper element with `data-stax-id`.
+      expect(container.innerHTML).toMatch(/<!--\$stax-\d+-->/);
       expect(container.innerHTML).toContain("data-stax-id=");
       // Should have keys for the rendered slots
       expect(container.innerHTML).toContain('data-stax-key="true"');

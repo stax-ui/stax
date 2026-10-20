@@ -232,6 +232,10 @@ export const StringRenderer: Renderer<VNode> = {
 
   enterPreresolvedNode: () => Effect.void,
 
+  enterSentinelAnchor: () => Effect.void,
+
+  exitSentinelAnchor: () => Effect.void,
+
   createSlot: () =>
     Effect.sync((): Slot<VNode> => {
       const marker = vComment("stax-slot");
