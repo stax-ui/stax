@@ -102,8 +102,34 @@ const hasActiveAnimations = (element: HTMLElement): boolean => {
 };
 
 /**
+ * Minimal shape of the `Animation` interface we rely on so this file
+ * stays usable in environments (older DOM lib targets, jsdom) that
+ * don't declare the full API.
+ */
+interface AnimationLike {
+  readonly effect?: { readonly target?: Node | null } | null;
+  readonly finished: Promise<unknown>;
+}
+
+/**
  * Wait for animation or transition to complete on an element.
- * Returns immediately if no animation/transition is detected.
+ *
+ * Prefers `element.getAnimations()` when available (every modern
+ * browser): it filters to animations/transitions whose effect target
+ * is `element` itself (so a descendant's hover transition can't
+ * resolve the parent's exit early), and waits on
+ * `Promise.allSettled(a.finished)` so the longest-running property
+ * decides when the lifecycle ends. If `getAnimations` returns an
+ * empty list the wait resolves immediately with `"skip"` — closes
+ * the "declared transition that doesn't actually change anything"
+ * gap where the event-based path waited out the full timeout.
+ *
+ * Falls back to the historical event-plus-timeout path for jsdom and
+ * other environments without `getAnimations`. That path keeps the
+ * same early-skip based on computed style and the same timeout
+ * warning. It gains an `event.target === element` guard on the end
+ * listeners so a bubbled `transitionend` from a descendant doesn't
+ * resolve the wait early.
  */
 export const waitForAnimationEvent = (
   element: HTMLElement,
@@ -117,12 +143,6 @@ export const waitForAnimationEvent = (
     let resolved = false;
 
     const rafId = requestAnimationFrame(() => {
-      if (!hasActiveAnimations(element)) {
-        resolved = true;
-        resume(Effect.succeed({ endedBy: "skip" }));
-        return;
-      }
-
       const resolve = (result: AnimationEndResult) => {
         if (resolved) return;
         resolved = true;
@@ -130,8 +150,82 @@ export const waitForAnimationEvent = (
         resume(Effect.succeed(result));
       };
 
-      const handleAnimationEnd = () => resolve({ endedBy: "animation" });
-      const handleTransitionEnd = () => resolve({ endedBy: "transition" });
+      // Fast path — `getAnimations` is the authoritative view of
+      // what's actually running on this element.
+      const getAnimationsFn = (
+        element as unknown as {
+          getAnimations?: (options?: { subtree?: boolean }) => AnimationLike[];
+        }
+      ).getAnimations;
+      if (typeof getAnimationsFn === "function") {
+        // Default `subtree: false` scopes to this element, but older
+        // Firefox builds return descendant animations anyway — filter
+        // defensively by effect.target.
+        const all = getAnimationsFn.call(element);
+        const own = all.filter((a) => {
+          const target = a.effect?.target;
+          return target === undefined || target === null || target === element;
+        });
+
+        if (own.length === 0) {
+          resolve({ endedBy: "skip" });
+          return;
+        }
+
+        let settled = false;
+        const timeoutId = setTimeout(() => {
+          if (process.env.NODE_ENV !== "production") {
+            console.warn(
+              "[stax] Animation timeout reached. Running animations did " +
+                "not settle within the configured timeout. If this is " +
+                "unexpected, check the animation's duration or whether " +
+                "the element is receiving new animation triggers mid-run.",
+              element,
+            );
+          }
+          resolve({ endedBy: "timeout" });
+        }, timeout);
+
+        cleanup = () => {
+          settled = true;
+          clearTimeout(timeoutId);
+        };
+
+        void Promise.allSettled(own.map((a) => a.finished)).then(() => {
+          if (settled) return;
+          // Classify as "transition" when the longest matcher was a
+          // CSSTransition; otherwise "animation". Peek via a non-
+          // enumerable trick that works across engines without
+          // widening the type surface.
+          const kind = own.some(
+            (a) =>
+              (a as unknown as { constructor?: { name?: string } }).constructor
+                ?.name === "CSSTransition",
+          )
+            ? ("transition" as const)
+            : ("animation" as const);
+          resolve({ endedBy: kind });
+        });
+        return;
+      }
+
+      // Fallback — no `getAnimations` (jsdom). Keep the computed-style
+      // early-skip and the event-plus-timeout path, with a self-target
+      // guard on the listeners so a bubbled descendant event can't
+      // resolve the parent's wait.
+      if (!hasActiveAnimations(element)) {
+        resolve({ endedBy: "skip" });
+        return;
+      }
+
+      const handleAnimationEnd = (e: Event) => {
+        if (e.target !== element) return;
+        resolve({ endedBy: "animation" });
+      };
+      const handleTransitionEnd = (e: Event) => {
+        if (e.target !== element) return;
+        resolve({ endedBy: "transition" });
+      };
       const handleTimeout = () => {
         if (process.env.NODE_ENV !== "production") {
           console.warn(
@@ -146,12 +240,8 @@ export const waitForAnimationEvent = (
         resolve({ endedBy: "timeout" });
       };
 
-      element.addEventListener("animationend", handleAnimationEnd, {
-        once: true,
-      });
-      element.addEventListener("transitionend", handleTransitionEnd, {
-        once: true,
-      });
+      element.addEventListener("animationend", handleAnimationEnd);
+      element.addEventListener("transitionend", handleTransitionEnd);
       const timeoutId = setTimeout(handleTimeout, timeout);
 
       cleanup = () => {

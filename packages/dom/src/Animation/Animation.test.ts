@@ -466,6 +466,40 @@ describe("Animation", () => {
       addSpy.mockRestore();
       removeSpy.mockRestore();
     });
+
+    it("ignores a bubbled transitionend from a descendant element", async () => {
+      // Regression: the end-event listeners used to be bound with
+      // `{ once: true }` and no `event.target === element` guard, so a
+      // descendant's `transitionend` (hover color on a nested button,
+      // for example) resolved the parent's wait early and tore down
+      // the animation lifecycle mid-flight. This test fires a bubbled
+      // transitionend from a child and asserts the parent's wait keeps
+      // ticking, then settles when the parent's own event fires.
+      const parent = document.createElement("div");
+      const child = document.createElement("button");
+      parent.appendChild(child);
+
+      const endedBy = await withMockedStyles(
+        { transitionProperty: "opacity", transitionDuration: "0.5s" },
+        async () => {
+          const p = Effect.runPromise(
+            waitForAnimationEvent(parent, 5000).pipe(
+              Effect.map((r) => r.endedBy),
+            ),
+          );
+          await new Promise((r) => setTimeout(r, 20));
+
+          // A bubbled descendant event must not resolve the parent.
+          child.dispatchEvent(new Event("transitionend", { bubbles: true }));
+          await new Promise((r) => setTimeout(r, 20));
+
+          // The parent's own event resolves it.
+          parent.dispatchEvent(new Event("transitionend"));
+          return p;
+        },
+      );
+      expect(endedBy).toBe("transition");
+    });
   });
 
   describe("multiple classes in options", () => {
