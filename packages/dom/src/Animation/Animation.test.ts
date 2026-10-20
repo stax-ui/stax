@@ -1,5 +1,5 @@
-import { Effect } from "effect";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Effect, Fiber } from "effect";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runEnterAnimation, runExitAnimation } from "./core.js";
 import { waitForAnimationEvent } from "./helpers.js";
@@ -9,6 +9,11 @@ import {
   staggerEased,
   staggerFromCenter,
 } from "./index.js";
+
+const afterEachRestoreGCS = (orig: typeof window.getComputedStyle) =>
+  afterEach(() => {
+    window.getComputedStyle = orig;
+  });
 
 // Mock window.matchMedia for reduced motion tests
 const mockMatchMedia = (matches: boolean) => {
@@ -494,6 +499,102 @@ describe("Animation", () => {
       expect(element.classList.contains("scale-95")).toBe(false);
       expect(element.classList.contains("opacity-100")).toBe(true);
       expect(element.classList.contains("scale-100")).toBe(true);
+    });
+  });
+
+  describe("interrupt cleanup", () => {
+    // The animation lifecycle leaves the element in different intermediate
+    // states depending on where it is — enter has `enterFrom` on briefly,
+    // then `enter + enterTo`, then only `enterTo`. If a run is interrupted
+    // mid-flight the next run (e.g. a reverse exit after a `when` flip)
+    // mustn't inherit stale classes. These tests fire a long-running
+    // animation, interrupt the fiber, and verify the element is clean.
+    //
+    // jsdom doesn't resolve CSS transitions from classes or inline styles
+    // through computed style the way browsers do, so we stub
+    // `getComputedStyle` for the duration of each test to make
+    // `hasActiveAnimations` report true and the wait actually park.
+    const originalGCS = window.getComputedStyle;
+    beforeEach(() => {
+      window.getComputedStyle = (() => ({
+        transitionProperty: "opacity",
+        transitionDuration: "1s",
+        animationName: "none",
+        animationDuration: "",
+        animationIterationCount: "",
+      })) as unknown as typeof window.getComputedStyle;
+    });
+    afterEachRestoreGCS(originalGCS);
+
+    it("strips enter-animation classes on interrupt", async () => {
+      const element = document.createElement("div");
+      // Pin an inline transition so `hasActiveAnimations` returns true
+      // and the wait doesn't short-circuit (jsdom doesn't resolve
+      // Tailwind classes to transition rules).
+      element.style.transition = "opacity 1s";
+
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const fiber = yield* Effect.fork(
+            runEnterAnimation(Effect.succeed(element), {
+              enterFrom: "opacity-0",
+              enter: "animating",
+              enterTo: "opacity-100",
+              timeout: 5000,
+            }),
+          );
+          // Enough time to progress past add-before-reflow so the state
+          // machine is parked inside waitForAnimationEvent waiting on a
+          // transitionend that will never fire.
+          yield* Effect.sleep("30 millis");
+          yield* Fiber.interrupt(fiber);
+          yield* Effect.sleep("10 millis");
+        }),
+      );
+
+      expect(element.classList.contains("opacity-0")).toBe(false);
+      expect(element.classList.contains("animating")).toBe(false);
+      expect(element.classList.contains("opacity-100")).toBe(false);
+    });
+
+    it("strips exit-animation classes on interrupt", async () => {
+      const element = document.createElement("div");
+      element.style.transition = "opacity 1s";
+
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const fiber = yield* Effect.fork(
+            runExitAnimation(Effect.succeed(element), {
+              exit: "animating",
+              exitTo: "opacity-0",
+              timeout: 5000,
+            }),
+          );
+          yield* Effect.sleep("30 millis");
+          yield* Fiber.interrupt(fiber);
+          yield* Effect.sleep("10 millis");
+        }),
+      );
+
+      expect(element.classList.contains("animating")).toBe(false);
+      expect(element.classList.contains("opacity-0")).toBe(false);
+    });
+
+    it("keeps enterTo on the element after a normal completion", async () => {
+      // Regression guard — the interrupt finalizer must NOT fire on normal
+      // completion (otherwise it would strip the final-state class).
+      const element = document.createElement("div");
+
+      await Effect.runPromise(
+        runEnterAnimation(Effect.succeed(element), {
+          enterFrom: "opacity-0",
+          enter: "transition-opacity",
+          enterTo: "opacity-100",
+          timeout: 10,
+        }),
+      );
+
+      expect(element.classList.contains("opacity-100")).toBe(true);
     });
   });
 });

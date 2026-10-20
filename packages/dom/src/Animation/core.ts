@@ -4,11 +4,10 @@ import { logDebug } from "@stax-ui/core";
 
 import * as Element from "../Element/index.js";
 import {
-  forceReflow,
   parseClasses,
   prefersReducedMotion,
   runHook,
-  waitForAnimationEnd,
+  waitForAnimationEvent,
 } from "./helpers.js";
 import type { AnimationHook, AnimationOptions } from "./types.js";
 
@@ -44,6 +43,14 @@ interface AnimationConfig {
 
 /**
  * Core animation runner that handles the common animation lifecycle.
+ *
+ * **Interrupt behavior.** The run tracks every class it adds or removes
+ * in a `touched` set. On interrupt (e.g. a rapid `when` flip reverses a
+ * mid-flight exit), we remove each `touched` class in a finalizer so
+ * the element starts the next run from a clean slate — no leftover
+ * `enterFrom`, `exit`, or `exitTo` fighting the reverse animation.
+ * On normal completion the finalizer never fires, so the final-state
+ * classes (`enterTo` for enter) stay on the element.
  */
 const runAnimation = <E, R>(
   element: Element.Element<HTMLElement, E, R>,
@@ -83,51 +90,72 @@ const runAnimation = <E, R>(
       return;
     }
 
-    // Run the animation
+    // Resolve the raw element once. Everything below writes to it via
+    // `classList` directly so the interrupt finalizer can remove exactly
+    // the classes we added without going through the Element pipe —
+    // `touched` is scoped to this run and dies with it on completion.
+    const el = yield* element;
+    const touched = new Set<string>();
+
+    const addGroups = (groups: readonly (string | undefined)[]) => {
+      for (const g of groups) {
+        if (!g) continue;
+        for (const c of parseClasses(g)) {
+          touched.add(c);
+          el.classList.add(c);
+        }
+      }
+    };
+    const removeGroups = (groups: readonly (string | undefined)[]) => {
+      for (const g of groups) {
+        if (!g) continue;
+        for (const c of parseClasses(g)) {
+          touched.add(c);
+          el.classList.remove(c);
+        }
+      }
+    };
+
     yield* logDebug(`${kind} animation: begin`, "stax.animation", {
       addBeforeReflow: addBeforeReflow.filter(Boolean),
       addAfterReflow: addAfterReflow.filter(Boolean),
     });
 
-    yield* runHook(onBefore, element);
+    const body = Effect.gen(function* () {
+      yield* runHook(onBefore, element);
 
-    // Add classes before reflow
-    for (const cls of addBeforeReflow) {
-      if (cls) {
-        yield* Element.addClass(element, ...parseClasses(cls));
-      }
-    }
+      addGroups(addBeforeReflow);
+      void el.offsetHeight; // force reflow
 
-    // Force reflow to ensure classes take effect
-    yield* forceReflow(element);
+      removeGroups(removeAfterReflow);
+      addGroups(addAfterReflow);
 
-    // Remove/add classes after reflow to trigger transitions
-    for (const cls of removeAfterReflow) {
-      if (cls) {
-        yield* Element.removeClass(element, ...parseClasses(cls));
-      }
-    }
-    for (const cls of addAfterReflow) {
-      if (cls) {
-        yield* Element.addClass(element, ...parseClasses(cls));
-      }
-    }
+      const outcome = yield* waitForAnimationEvent(el, timeout);
 
-    // Wait for animation to complete
-    const outcome = yield* waitForAnimationEnd(element, timeout);
+      removeGroups(removeAfterAnimation);
 
-    // Cleanup animation classes
-    for (const cls of removeAfterAnimation) {
-      if (cls) {
-        yield* Element.removeClass(element, ...parseClasses(cls));
-      }
-    }
+      yield* runHook(onAfter, element);
 
-    yield* runHook(onAfter, element);
-
-    yield* logDebug(`${kind} animation: end`, "stax.animation", {
-      endedBy: outcome.endedBy,
+      yield* logDebug(`${kind} animation: end`, "stax.animation", {
+        endedBy: outcome.endedBy,
+      });
     });
+
+    let completed = false;
+    yield* body.pipe(
+      Effect.tap(() => Effect.sync(() => (completed = true))),
+      Effect.ensuring(
+        Effect.sync(() => {
+          if (completed) return;
+          // Interrupt mid-run: strip every class the run put on the
+          // element so a subsequent run (e.g. a reverse exit after an
+          // enter was interrupted) doesn't inherit stale state. Removing
+          // a class that was never added is a no-op, so this is safe
+          // even when the interrupt fires early.
+          for (const c of touched) el.classList.remove(c);
+        }),
+      ),
+    );
   }) as Effect.Effect<void, E, R>;
 
 /**
