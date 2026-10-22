@@ -233,6 +233,7 @@ export const staxPlatform = (options: StaxPlatformOptions = {}): Plugin => {
         const output = cbo.entryFileNames
           ? { entryFileNames: cbo.entryFileNames }
           : undefined;
+        const previewOpts = options.adapter!.previewOptions;
         return {
           build: {
             outDir: clientOutDir,
@@ -242,6 +243,16 @@ export const staxPlatform = (options: StaxPlatformOptions = {}): Plugin => {
               ...(output && { output }),
             },
           },
+          // Adapters that want `vite preview` to match their runtime
+          // routing (e.g. SSG uses `appType: "mpa"` so directory URLs
+          // resolve to their `index.html` the same way every real
+          // static host does) contribute it here. Vite's `appType` is
+          // top-level and applies to both dev and preview — for SSG
+          // there's no dev-server use case anyway, so setting it
+          // top-level is the right scope.
+          ...(previewOpts?.appType && {
+            appType: previewOpts.appType,
+          }),
         };
       }
     },
@@ -327,6 +338,57 @@ export const staxPlatform = (options: StaxPlatformOptions = {}): Plugin => {
       if (transformed === code) return null;
 
       return { code: transformed, map: null };
+    },
+
+    // -------------------------------------------------------------------------
+    // Preview server (prod output under `vite preview`)
+    // -------------------------------------------------------------------------
+    //
+    // Adapters that produce multi-page output (e.g. SSG) opt into
+    // `appType: "mpa"` via `previewOptions`. Vite's MPA preview serves
+    // files literally, which means `GET /docs/introduction` 404s even
+    // though `/docs/introduction/index.html` exists. Every real static
+    // host (Cloudflare Pages, Netlify, nginx, GitHub Pages, S3+CloudFront)
+    // does "pretty URL" resolution — maps `/path` to `/path/index.html`
+    // when the directory exists — so prod and preview diverge here in a
+    // way that bites during development.
+    //
+    // This middleware closes the gap: for a request without a file
+    // extension that doesn't end in `/`, if the matching
+    // `${req.url}/index.html` exists in the build output, we rewrite
+    // `req.url` to that path before Vite's static server picks it up.
+    // No redirect, one request, prod-shaped behavior.
+    configurePreviewServer(server) {
+      const previewOpts = options.adapter?.previewOptions;
+      if (previewOpts?.appType !== "mpa") return;
+
+      const buildOut = path.resolve(
+        root,
+        options.adapter!.clientBuildOptions?.outDir ?? "dist",
+      );
+
+      server.middlewares.use((req, _res, next) => {
+        const url = req.url ?? "/";
+        // Fast skips. Ignore query/hash — look at pathname only.
+        const [pathnameRaw] = url.split("?");
+        const [pathname] = pathnameRaw.split("#");
+        if (
+          pathname === "/" ||
+          pathname.endsWith("/") ||
+          // Has a file extension (e.g. `.js`, `.css`, `.json`, `.html`).
+          /\.[a-zA-Z0-9]+$/.test(pathname)
+        ) {
+          return next();
+        }
+        const candidate = path.join(buildOut, pathname, "index.html");
+        if (fs.existsSync(candidate)) {
+          // Rewrite in-place. Preserve any query the client passed
+          // (unlikely for pretty URLs, but harmless to carry through).
+          const rest = url.slice(pathnameRaw.length);
+          req.url = `${pathname}/index.html${rest}`;
+        }
+        next();
+      });
     },
 
     // -------------------------------------------------------------------------
