@@ -24,6 +24,22 @@ export class NoRenderError extends Data.TaggedError("NoRenderError")<{
   readonly path: string;
 }> {}
 
+/**
+ * Thrown by Outlet when a route's `meta` function throws during
+ * resolution. Added to the Route's E channel by `Route.meta(...)` so
+ * the risk is visible at the call site: `Effect.catchTag(
+ * "MetaRenderError", ...)` to recover, or let it propagate out of
+ * Outlet.
+ *
+ * `cause` is whatever the meta function threw (typically a
+ * `TypeError` on a stale `data` reference — the specific bug class
+ * this error was introduced to surface at build time).
+ */
+export class MetaRenderError extends Data.TaggedError("MetaRenderError")<{
+  readonly route: string;
+  readonly cause: unknown;
+}> {}
+
 // =============================================================================
 // Path Parsing
 // =============================================================================
@@ -1027,7 +1043,7 @@ export const meta =
   <P, SP, D>(input: MetaInput<P, SP, D>) =>
   <Path extends string, E, R>(
     route: Route<Path, P, SP, D, E, R>,
-  ): Route<Path, P, SP, D, E, R> => {
+  ): Route<Path, P, SP, D, E | MetaRenderError, R> => {
     return Object.assign(Object.create(RouteProto), {
       ...route,
       _meta: input,
@@ -1163,4 +1179,6 @@ export const Route = {
   catchIf,
   catchTag,
   catchAll,
+  NoRenderError,
+  MetaRenderError,
 };

@@ -20,7 +20,7 @@ import {
 
 import { buildPath, NavigationContext, type Navigation } from "./Navigation.js";
 import { OutletCtx } from "./OutletCtx.js";
-import { resolveMeta, type Route } from "./Route.js";
+import { MetaRenderError, resolveMeta, type Route } from "./Route.js";
 import {
   RouteDataContext,
   RouteDataProvider,
@@ -242,17 +242,34 @@ const renderRouteWithGuard = <E, R>(
 
     // Resolve meta (title, description, etc.) and apply to document
     if (route._meta) {
-      const meta = resolveMeta(route, {
-        params: currentMatch.params,
-        searchParams: searchParamsObj,
-        data: routeData.data,
+      // User-supplied meta functions can read fields off `routeData.data`
+      // that may not line up (SSG client-side nav loading wrong-shape
+      // data, loader stripped by the Vite transform leaving `data`
+      // undefined, consumer-side type mismatch). We surface a typed
+      // `MetaRenderError` here instead of letting the raw TypeError
+      // crash the render — the error flows out of Outlet on the E
+      // channel, where the user can `Effect.catchTag("MetaRenderError",
+      // ...)` to recover or let it propagate.
+      const meta = yield* Effect.try({
+        try: () =>
+          resolveMeta(route, {
+            params: currentMatch.params,
+            searchParams: searchParamsObj,
+            data: routeData.data,
+          }),
+        catch: (cause) => new MetaRenderError({ route: route.path, cause }),
       });
       if (typeof document !== "undefined" && meta.title) {
         document.title = meta.title;
       }
     }
 
-    // Build the route element with RouteContext and RouteDataContext provided
+    // Build the route element with RouteContext and RouteDataContext
+    // provided. The render function's own typed E flows through on
+    // the Route's E channel; render defects (unexpected throws) stay
+    // as defects, where `reconcile`'s subscription-survival guard
+    // swallows them so one bad route doesn't freeze the whole
+    // navigation subscription.
     const routeElement = route.render(routeData.data).pipe(
       Effect.provideService(route.Params, {
         params: currentMatch.params,

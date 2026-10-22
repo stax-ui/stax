@@ -175,6 +175,17 @@ export const reconcile = <A, E, R>(
     // rather than each ControlCtx's subscribe impl because the semantics
     // are inherent to reconcile (any subscribe strategy needs this),
     // not to any particular DOM/hydration wiring.
+    //
+    // **Typed errors (e.g. `Outlet`'s `MetaRenderError`) are also
+    // swallowed here**, because the subscription fiber runs via
+    // `Effect.forkScoped` and its failures don't propagate to the
+    // caller's `catchTag`. Surfacing them for recovery would require
+    // a bigger architectural change to how `ctx.subscribe` propagates
+    // results — see the follow-up discussion in #190. For now the
+    // typed-error classes buy clearer logs (the subsystem log carries
+    // the error's `_tag`) and let the INITIAL `sync` call above —
+    // which propagates to the caller — be `.pipe(Effect.catchTag(
+    // "MetaRenderError", ...))`-able.
     const safeSync = (value: A) =>
       sync(value).pipe(
         Effect.tapErrorCause((cause) =>
