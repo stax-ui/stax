@@ -114,6 +114,27 @@ describe("Signal.fromReactive", () => {
     );
     expect(result).toBe(20);
   });
+
+  it("tracks later Readable emissions, not just the initial read", async () => {
+    // Regression: `fromReactive`'s Readable path used to call .get once
+    // and bake the value into a new Signal, so later consumer updates
+    // never reached the component. The fix subscribes to the Readable
+    // and writes each emission into the returned Signal.
+    const result = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const source = yield* Signal.make(0);
+          const derived = source.pipe(Readable.map((n) => n + 100));
+          const signal = yield* Signal.fromReactive(derived, -1);
+          yield* source.set(5);
+          // Let the forked subscription catch up.
+          yield* Effect.sleep("10 millis");
+          return yield* signal.get;
+        }),
+      ),
+    );
+    expect(result).toBe(105);
+  });
 });
 
 describe("Signal reactivity", () => {
@@ -654,5 +675,302 @@ describe("Signal.trace", () => {
       ).pipe(Logger.withMinimumLogLevel(LogLevel.Debug), Effect.provide(layer)),
     );
     expect(calls).toBe(1);
+  });
+});
+
+describe("Signal.controllable", () => {
+  describe("uncontrolled", () => {
+    it("writes commit when value is omitted", async () => {
+      const result = await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const sig = yield* Signal.controllable({ defaultValue: 0 });
+            yield* sig.set(5);
+            return yield* sig.get;
+          }),
+        ),
+      );
+      expect(result).toBe(5);
+    });
+
+    it("fires onChange after a committed write", async () => {
+      const changes: number[] = [];
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const sig = yield* Signal.controllable({
+              defaultValue: 0,
+              onChange: (v) => Effect.sync(() => changes.push(v)),
+            });
+            yield* sig.set(1);
+            yield* sig.set(2);
+            yield* sig.update((n) => n + 10);
+          }),
+        ),
+      );
+      expect(changes).toEqual([1, 2, 12]);
+    });
+
+    it("skips onChange and does not write when the new value is equal", async () => {
+      const changes: number[] = [];
+      const result = await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const sig = yield* Signal.controllable({
+              defaultValue: 7,
+              onChange: (v) => Effect.sync(() => changes.push(v)),
+            });
+            yield* sig.set(7); // same value
+            return yield* sig.get;
+          }),
+        ),
+      );
+      expect(result).toBe(7);
+      expect(changes).toEqual([]);
+    });
+
+    it("respects a custom equals", async () => {
+      const changes: Array<{ id: number }> = [];
+      const result = await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const sig = yield* Signal.controllable({
+              defaultValue: { id: 1, label: "a" } as {
+                id: number;
+                label: string;
+              },
+              equals: (a, b) => a.id === b.id,
+              onChange: (v) => Effect.sync(() => changes.push(v)),
+            });
+            yield* sig.set({ id: 1, label: "b" }); // same id, skipped
+            yield* sig.set({ id: 2, label: "c" });
+            return yield* sig.get;
+          }),
+        ),
+      );
+      expect(result).toEqual({ id: 2, label: "c" });
+      expect(changes.map((c) => c.id)).toEqual([2]);
+    });
+
+    it("serializes update so N increments give +N", async () => {
+      const result = await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const sig = yield* Signal.controllable({ defaultValue: 0 });
+            yield* Effect.all(
+              [sig.update((n) => n + 1), sig.update((n) => n + 1)],
+              { concurrency: "unbounded" },
+            );
+            return yield* sig.get;
+          }),
+        ),
+      );
+      expect(result).toBe(2);
+    });
+
+    it("waits for a suspending onChange before releasing the semaphore", async () => {
+      const result = await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const observed: number[] = [];
+            const sig = yield* Signal.controllable({
+              defaultValue: 0,
+              onChange: (v) =>
+                Effect.gen(function* () {
+                  // Observe the committed value from inside onChange.
+                  // Semaphore held → subsequent set hasn't started yet.
+                  yield* Effect.sleep("10 millis");
+                  observed.push(v);
+                }),
+            });
+            yield* Effect.all([sig.set(1), sig.set(2), sig.set(3)], {
+              concurrency: "unbounded",
+            });
+            return observed;
+          }),
+        ),
+      );
+      // The exact ordering depends on scheduler, but set(2) and set(3)
+      // can't start until set(1)'s onChange finishes, so observed sees
+      // each in-order.
+      expect(result).toEqual([1, 2, 3]);
+    });
+  });
+
+  describe("controlled", () => {
+    it("reads delegate to the consumer's Readable", async () => {
+      const result = await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const consumer = yield* Signal.make(10);
+            const sig = yield* Signal.controllable({
+              value: consumer,
+              defaultValue: 0, // ignored in controlled mode
+            });
+            return yield* sig.get;
+          }),
+        ),
+      );
+      expect(result).toBe(10);
+    });
+
+    it("set fires onChange but does not write to the consumer", async () => {
+      const changes: number[] = [];
+      const result = await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const consumer = yield* Signal.make(10);
+            const sig = yield* Signal.controllable({
+              value: consumer,
+              defaultValue: 0,
+              onChange: (v) => Effect.sync(() => changes.push(v)),
+            });
+            yield* sig.set(99);
+            return {
+              component: yield* sig.get,
+              consumer: yield* consumer.get,
+            };
+          }),
+        ),
+      );
+      expect(changes).toEqual([99]);
+      expect(result.component).toBe(10); // unchanged — consumer didn't apply
+      expect(result.consumer).toBe(10);
+    });
+
+    it("follows consumer updates reactively", async () => {
+      const result = await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const consumer = yield* Signal.make(1);
+            const sig = yield* Signal.controllable({
+              value: consumer,
+              defaultValue: 0,
+            });
+            yield* consumer.set(42);
+            return yield* sig.get;
+          }),
+        ),
+      );
+      expect(result).toBe(42);
+    });
+
+    it("does not fire onChange when the consumer updates on its own", async () => {
+      // Fire-on-outside-change would be a feedback-loop trap.
+      const changes: number[] = [];
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const consumer = yield* Signal.make(1);
+            const sig = yield* Signal.controllable({
+              value: consumer,
+              defaultValue: 0,
+              onChange: (v) => Effect.sync(() => changes.push(v)),
+            });
+            yield* consumer.set(2);
+            yield* Effect.sleep("10 millis");
+            // sanity: component sees the external change via .get
+            yield* sig.get;
+          }),
+        ),
+      );
+      expect(changes).toEqual([]);
+    });
+
+    it("accepts a plain value and renders a read-only Signal", async () => {
+      const changes: boolean[] = [];
+      const result = await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const sig = yield* Signal.controllable({
+              value: true, // plain value — pinned, read-only
+              defaultValue: false,
+              onChange: (v) => Effect.sync(() => changes.push(v)),
+            });
+            yield* sig.set(false); // request change
+            return yield* sig.get;
+          }),
+        ),
+      );
+      expect(result).toBe(true); // never changes
+      expect(changes).toEqual([false]); // request still routes
+    });
+
+    it("accepts a Readable (non-Signal) and tracks its emissions", async () => {
+      const result = await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const source = yield* Signal.make(0);
+            const derived = source.pipe(Readable.map((n) => n * 2));
+            const sig = yield* Signal.controllable({
+              value: derived,
+              defaultValue: -1,
+            });
+            yield* source.set(5);
+            return yield* sig.get;
+          }),
+        ),
+      );
+      expect(result).toBe(10);
+    });
+  });
+
+  describe("Signal interface", () => {
+    it("the returned value passes isSignal and isReadable", async () => {
+      const result = await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const sig = yield* Signal.controllable({ defaultValue: 0 });
+            return {
+              sig: Signal.isSignal(sig),
+              readable: Readable.isReadable(sig),
+            };
+          }),
+        ),
+      );
+      expect(result).toEqual({ sig: true, readable: true });
+    });
+
+    it("writes propagate on the changes stream in uncontrolled mode", async () => {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const sig = yield* Signal.controllable({ defaultValue: 0 });
+            const emissions: number[] = [];
+            yield* Stream.runForEach(sig.changes, (v) =>
+              Effect.sync(() => emissions.push(v)),
+            ).pipe(Effect.fork);
+            yield* Effect.sleep("10 millis");
+            yield* sig.set(1);
+            yield* sig.set(2);
+            yield* Effect.sleep("10 millis");
+            expect(emissions).toEqual([1, 2]);
+          }),
+        ),
+      );
+    });
+
+    it("consumer updates propagate on the changes stream in controlled mode", async () => {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const consumer = yield* Signal.make(0);
+            const sig = yield* Signal.controllable({
+              value: consumer,
+              defaultValue: -1,
+            });
+            const emissions: number[] = [];
+            yield* Stream.runForEach(sig.changes, (v) =>
+              Effect.sync(() => emissions.push(v)),
+            ).pipe(Effect.fork);
+            yield* Effect.sleep("10 millis");
+            yield* consumer.set(1);
+            yield* consumer.set(2);
+            yield* Effect.sleep("10 millis");
+            expect(emissions).toEqual([1, 2]);
+          }),
+        ),
+      );
+    });
   });
 });

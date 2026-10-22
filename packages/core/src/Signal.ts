@@ -287,24 +287,13 @@ export const trace =
 
 /**
  * Use an existing Signal if provided, otherwise create a new one with the default value.
- * This enables the controlled/uncontrolled component pattern.
  *
- * @param existing - An optional Signal to use if provided
- * @param defaultValue - The default value to use when creating a new Signal
- *
- * @example
- * ```ts
- * // In a component that supports both controlled and uncontrolled modes:
- * const value = yield* Signal.fromNullable(props.value, props.defaultValue ?? "");
- *
- * // If props.value is a Signal, it will be used directly
- * // If props.value is undefined, a new Signal is created with defaultValue
- *
- * // With custom equality:
- * const value = yield* Signal.fromNullable(props.value, defaultUser).pipe(
- *   Signal.equals((a, b) => a.id === b.id)
- * );
- * ```
+ * @deprecated Use {@link controllable} instead. This helper hands the
+ * consumer's Signal through unmodified, so the component writes to it
+ * directly — the consumer has no veto, no transform, no notification
+ * hook, and a component can mutate state it doesn't own.
+ * `Signal.controllable` makes change requests go through an `onChange`
+ * callback the consumer owns.
  */
 export const fromNullable = <A>(
   existing: Signal<A> | undefined,
@@ -315,38 +304,16 @@ export const fromNullable = <A>(
 /**
  * Create a Signal from a reactive value (Signal, Readable, or plain value).
  *
- * - If input is already a Signal, returns it as-is
- * - If input is a Readable, creates a new Signal initialized with the Readable's current value
- * - If input is a plain value, creates a new Signal with that value
- *
- * This is useful for controlled/uncontrolled component patterns where a prop
- * can be either a Signal (controlled), a Readable, or a plain value (uncontrolled).
- *
- * @param value - A Signal, Readable, or plain value
- * @param defaultValue - Default value to use if the input value is undefined
- *
- * @example
- * ```ts
- * // In a component that accepts flexible input:
- * interface CheckboxProps {
- *   checked?: Signal<boolean> | Readable<boolean> | boolean;
- *   defaultChecked?: boolean;
- * }
- *
- * const Checkbox = (props: CheckboxProps) =>
- *   Effect.gen(function* () {
- *     // Works with Signal (controlled), Readable, or boolean (uncontrolled)
- *     const checked = yield* Signal.fromReactive(
- *       props.checked,
- *       props.defaultChecked ?? false
- *     );
- *
- *     // With custom equality:
- *     const user = yield* Signal.fromReactive(props.user, defaultUser).pipe(
- *       Signal.equals((a, b) => a.id === b.id)
- *     );
- *   });
- * ```
+ * @deprecated Use {@link controllable} instead. The Readable path here
+ * historically read the Readable's value *once* and never followed later
+ * changes — a component using this with a Readable prop looked
+ * controlled but silently stopped tracking the consumer after the first
+ * render. That bug is now patched (changes propagate into the returned
+ * Signal), but the broader design problem remains: the Signal case
+ * still hands the consumer's Signal through, so the component writes
+ * directly to it with no hook for validation or notification.
+ * `Signal.controllable` fixes both. This helper will be removed in a
+ * future release.
  */
 export const fromReactive = <A>(
   value: Signal<A> | Readable.Readable<A> | A | undefined,
@@ -363,14 +330,202 @@ export const fromReactive = <A>(
       return value as Signal<A>;
     }
 
-    // Check if it's a Readable (has ReadableTypeId but not SignalTypeId)
+    // Check if it's a Readable (has ReadableTypeId but not SignalTypeId).
+    // Historically this read the Readable once and never followed later
+    // changes; now we subscribe so a controlled-via-Readable component
+    // actually tracks the consumer. Writes to the returned Signal stay
+    // local (the consumer's Readable is not written back to); the
+    // consumer emitting a new value overwrites any local write with the
+    // next upstream value, matching "the consumer owns the state."
     if (Readable.isReadable(value)) {
-      const currentValue = yield* (value as Readable.Readable<A>).get;
-      return yield* make(currentValue ?? defaultValue);
+      const readable = value as Readable.Readable<A>;
+      const current = yield* readable.get;
+      const signal = yield* make(current ?? defaultValue);
+      yield* Readable.tap(readable, (v) => signal.set(v));
+      return signal;
     }
 
     // Otherwise, it's a plain value
     return yield* make(value as A);
+  });
+
+// -----------------------------------------------------------------------------
+// Controllable (controlled/uncontrolled component pattern)
+// -----------------------------------------------------------------------------
+
+/**
+ * Options for {@link controllable}.
+ *
+ * @template A - The value type.
+ */
+export interface ControllableOptions<A> {
+  /**
+   * If defined, the component is **controlled** — the consumer owns the
+   * state. Accepts a Readable (incl. a Signal, which is used as a
+   * Readable) or a plain value. If omitted, the component is
+   * **uncontrolled** and the returned Signal owns its own state.
+   */
+  readonly value?: Readable.Reactive<A>;
+  /**
+   * Initial value used when `value` is omitted. Ignored in controlled
+   * mode.
+   */
+  readonly defaultValue: A;
+  /**
+   * Called with the requested next value whenever the component asks
+   * for a change via `.set` or `.update`. Fires in both modes — use it
+   * for notification. In controlled mode, `onChange` is also how the
+   * consumer learns the component wants to change state; the consumer
+   * updates their own Readable in response (or declines to).
+   *
+   * Does **not** fire for value changes that arrive from outside — if
+   * the consumer updates their Readable, the returned Signal's
+   * `.changes` already emits for it; firing `onChange` on top would
+   * invite feedback loops.
+   */
+  readonly onChange?: (next: A) => Effect.Effect<void>;
+  /**
+   * Same-value guard. If `equals(current, next)` is true, no `onChange`
+   * fires and no write happens. Defaults to `===`.
+   */
+  readonly equals?: (a: A, b: A) => boolean;
+}
+
+/**
+ * The controlled/uncontrolled component pattern as a Signal factory.
+ *
+ * - **Uncontrolled** (`value` omitted). The returned Signal owns its
+ *   own state, initialised to `defaultValue`. `.set` / `.update` write
+ *   to it and then fire `onChange` with the committed value.
+ * - **Controlled** (`value` defined). The returned Signal's reads
+ *   delegate to the consumer's Readable, so it always reflects whatever
+ *   the consumer currently holds. `.set` / `.update` fire `onChange`
+ *   with the requested value and otherwise do nothing — the value only
+ *   changes when the consumer updates their own state in response.
+ *
+ * From the component author's perspective it's a Signal either way:
+ * read via `.get` / `.changes` / `.values`, write via `.set` /
+ * `.update`. Which of those writes stick is the consumer's call, which
+ * is the whole point of the pattern.
+ *
+ * **Mode is fixed at construction.** Props on stax components are
+ * evaluated once (unlike React's per-render props), so `value` can't
+ * flip from defined to undefined later. A plain value in controlled
+ * mode is legitimate — the component is read-only, pinned to that
+ * value.
+ *
+ * **Writes are serialized.** A one-permit semaphore holds across each
+ * `.set` / `.update` (including the `onChange` call), so two quick
+ * `update(f)` calls see the previous commit — in uncontrolled mode,
+ * `update((n) => n + 1)` called twice goes 0 → 1 → 2. In controlled
+ * mode "committed" is up to the consumer; if the consumer applies the
+ * change asynchronously, the second `update` may still see the old
+ * value. React has the same caveat.
+ *
+ * @example
+ * ```ts
+ * interface ToggleProps {
+ *   readonly pressed?: Readable.Reactive<boolean>;
+ *   readonly defaultPressed?: boolean;
+ *   readonly onPressedChange?: (pressed: boolean) => Effect.Effect<void>;
+ * }
+ *
+ * const Toggle = (props: ToggleProps) =>
+ *   Effect.gen(function* () {
+ *     const pressed = yield* Signal.controllable({
+ *       value: props.pressed,
+ *       defaultValue: props.defaultPressed ?? false,
+ *       onChange: props.onPressedChange,
+ *     });
+ *     return yield* $.button(
+ *       {
+ *         "aria-pressed": pressed,
+ *         onClick: () => pressed.update((p) => !p),
+ *       },
+ *       "Bold",
+ *     );
+ *   });
+ *
+ * // Uncontrolled
+ * Toggle({ defaultPressed: true });
+ *
+ * // Controlled — the consumer owns the state
+ * const bold = yield* Signal.make(false);
+ * Toggle({ pressed: bold, onPressedChange: (p) => bold.set(p) });
+ *
+ * // Controlled, with the consumer refusing some changes
+ * Toggle({
+ *   pressed: bold,
+ *   onPressedChange: (p) => (locked ? Effect.void : bold.set(p)),
+ * });
+ * ```
+ */
+export const controllable = <A>(
+  options: ControllableOptions<A>,
+): Effect.Effect<Signal<A>, never, Scope.Scope> =>
+  Effect.gen(function* () {
+    const equals = options.equals ?? ((a: A, b: A) => a === b);
+    const onChange = options.onChange;
+    const semaphore = yield* Effect.makeSemaphore(1);
+
+    if (options.value !== undefined) {
+      // Controlled: proxy over the consumer's Readable. `.set` / `.update`
+      // do NOT write to the consumer — they only fire `onChange`.
+      const external = Readable.normalize(options.value);
+
+      const request = (next: A) =>
+        semaphore.withPermits(1)(
+          Effect.gen(function* () {
+            const current = yield* external.get;
+            if (equals(current, next)) return;
+            if (onChange) yield* onChange(next);
+          }),
+        );
+
+      const signal: Signal<A> = {
+        ...external,
+        [SignalTypeId]: SignalTypeId,
+        set: request,
+        update: (f) =>
+          semaphore.withPermits(1)(
+            Effect.gen(function* () {
+              const current = yield* external.get;
+              const next = f(current);
+              if (equals(current, next)) return;
+              if (onChange) yield* onChange(next);
+            }),
+          ),
+      };
+      return signal;
+    }
+
+    // Uncontrolled: real backing SubscriptionRef. Mirrors Signal.make
+    // but routes commits through onChange after writing.
+    const ref = yield* SubscriptionRef.make(options.defaultValue);
+    const getChanges = () => Stream.drop(ref.changes, 1);
+    const readable = Readable.make(SubscriptionRef.get(ref), getChanges);
+
+    const commit = (next: A) =>
+      Effect.gen(function* () {
+        const current = yield* SubscriptionRef.get(ref);
+        if (equals(current, next)) return;
+        yield* SubscriptionRef.set(ref, next);
+        if (onChange) yield* onChange(next);
+      });
+
+    const signal: Signal<A> = {
+      ...readable,
+      [SignalTypeId]: SignalTypeId,
+      set: (a) => semaphore.withPermits(1)(commit(a)),
+      update: (f) =>
+        semaphore.withPermits(1)(
+          Effect.gen(function* () {
+            const current = yield* SubscriptionRef.get(ref);
+            yield* commit(f(current));
+          }),
+        ),
+    };
+    return signal;
   });
 
 /**
@@ -403,6 +558,7 @@ export const Signal = {
   make,
   equals,
   trace,
+  controllable,
   fromNullable,
   fromReactive,
   SignalRegistry,
