@@ -276,9 +276,14 @@ export const toHttpRoutes = <
   P extends Record<string, unknown> | never,
   S extends Record<string, unknown> | never,
   D,
+  E,
   R,
 >(
-  router: StaxRouter<P, S, D, never, R>,
+  // `E` is accepted so routes with typed error channels (e.g. `Route.meta(...)` -> `MetaRenderError`)
+  // can be served. The runtime `Effect.catchAllCause` below converts any
+  // render failure into a 500 response, so the signature's job is only
+  // to admit the type into the pipeline.
+  router: StaxRouter<P, S, D, E, R>,
   options?: ToHttpRoutesOptions,
 ): HttpRouter.HttpRouter<
   RedirectError | RouteNotFound,
