@@ -1,4 +1,4 @@
-import { Duration, Effect, Either, Option } from "effect";
+import { Cause, Context, Duration, Effect, Either, Option } from "effect";
 
 import type { Element } from "./Element.js";
 import { SuspenseBoundaryCtx } from "./SuspenseBoundaryCtx.js";
@@ -149,9 +149,37 @@ export const error = <N, E, R1 = never, R2 = never>(
  * )
  * ```
  */
+// -----------------------------------------------------------------------------
+// Error Boundary Context (sideband for reactive error boundaries)
+// -----------------------------------------------------------------------------
+
+/**
+ * Service a reactive error boundary provides into its subtree.
+ *
+ * `reconcile`'s `safeSync` looks this up via `Effect.serviceOption` on
+ * every subscription-path sync. On typed failures (and on defects
+ * when the boundary opted in), it calls `report` so the nearest
+ * enclosing boundary can swap to its fallback. On successful syncs
+ * it calls `clear` so a successful nav after a failed one
+ * auto-recovers the UI.
+ *
+ * Not provided → no boundary present → `safeSync` falls back to its
+ * historical "log + swallow" behavior. Entirely opt-in; existing
+ * callers see no behavior change.
+ */
+export interface ErrorBoundaryService {
+  readonly report: (cause: Cause.Cause<unknown>) => Effect.Effect<void>;
+  readonly clear: Effect.Effect<void>;
+}
+
+export class ErrorBoundaryCtx extends Context.Tag(
+  "@stax-ui/core/ErrorBoundaryCtx",
+)<ErrorBoundaryCtx, ErrorBoundaryService>() {}
+
 export const Boundary = {
   suspense,
   error,
+  ErrorBoundaryCtx,
 } as const;
 
 // Re-export types

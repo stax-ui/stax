@@ -45,8 +45,12 @@ export type { Element } from "./Element.js";
 export { MergePropsCtx } from "./Element.js";
 
 // Boundary
-export type { SuspenseOptions, BoundarySuspenseOptions } from "./Boundary.js";
-export { Boundary } from "./Boundary.js";
+export type {
+  SuspenseOptions,
+  BoundarySuspenseOptions,
+  ErrorBoundaryService,
+} from "./Boundary.js";
+export { Boundary, ErrorBoundaryCtx } from "./Boundary.js";
 
 // SuspenseBoundaryCtx
 export type { ISuspenseBoundaryCtx } from "./SuspenseBoundaryCtx.js";

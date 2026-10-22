@@ -6,14 +6,19 @@
  * This allows the same code to work across client, SSR, and hydration modes.
  */
 
-import type { Duration } from "effect";
+import { Cause, Duration, Effect, Either, Option } from "effect";
 
 import {
+  ControlCtx,
   Boundary as CoreBoundary,
+  ErrorBoundaryCtx,
+  Signal,
   SuspenseBoundaryCtx,
   type BoundarySuspenseOptions as CoreSuspenseOptions,
+  type ErrorBoundaryService,
 } from "@stax-ui/core";
 
+import { matchOption } from "./Control/index.js";
 import * as Element from "./Element/index.js";
 
 type DOMElement = HTMLElement | SVGElement;
@@ -159,11 +164,142 @@ export const suspense: {
  * )
  * ```
  */
+/**
+ * Options for the DOM-side `Boundary.error`.
+ */
+export interface ErrorOptions {
+  /**
+   * When true, defects (unexpected throws from user code —
+   * `Effect.die`, uncaught sync throws, etc.) ALSO trigger the
+   * fallback. Default is `false`: only typed `Effect.fail(...)`
+   * failures are caught, matching the "surface planned risk"
+   * principle. Flip to `true` when you want the boundary to catch
+   * runtime bugs too (e.g. a top-level app boundary).
+   */
+  readonly catchDefects?: boolean;
+}
+
+/**
+ * Error boundary that catches errors from a render function and
+ * displays a fallback element. Reactive: subscription-fiber failures
+ * (route render errors from `Outlet`, slot render errors from `each`
+ * / `when` / `match`, etc.) also route through here, not just the
+ * initial render.
+ *
+ * The boundary provides an `ErrorBoundaryCtx` into its subtree.
+ * `reconcile`'s `safeSync` reports failures through that service and
+ * clears on successful syncs, so a successful nav after a failed one
+ * auto-swaps back to the child. If a nested boundary is also
+ * installed, the nearest ancestor wins (standard context semantics).
+ *
+ * **Opt-in:** no boundary wrapping Outlet / `each` / etc. means the
+ * historical "log + swallow" subscription behavior stays, with no
+ * change for existing callers.
+ *
+ * @param tryRender - Function that may fail with an error.
+ * @param catchRender - Function to render the fallback. Called when
+ *   the initial render fails OR when the subscription path reports an
+ *   error. On subsequent subscription success, the child is remounted.
+ * @param options - See {@link ErrorOptions}.
+ *
+ * @example
+ * ```ts
+ * Boundary.error(
+ *   () => Outlet({ router }),
+ *   (err: MetaRenderError) =>
+ *     $.div({ class: "error" }, "Oops — ", err.route, " broke"),
+ * )
+ * ```
+ */
 export const error = <N extends DOMElement, E, R1 = never, R2 = never>(
   tryRender: () => Element.Element<N, E, R1>,
   catchRender: (error: E) => Element.Element<N, never, R2>,
-): Element.Element<N, never, R1 | R2> =>
-  CoreBoundary.error(tryRender, catchRender);
+  options: ErrorOptions = {},
+): Element.Element<N, never, ControlCtx | R1 | R2> => {
+  const catchDefects = options.catchDefects ?? false;
+  return Effect.gen(function* () {
+    // Latest-cause signal. `safeSync` writes `Some(cause)` on reported
+    // failures and `None` on successful subsequent syncs, so the
+    // boundary swaps back to the child automatically when navigation
+    // recovers.
+    const errors = yield* Signal.make<Option.Option<Cause.Cause<E>>>(
+      Option.none(),
+    );
+
+    // Build the ambient service. `catchDefects` is enforced here so
+    // `safeSync` doesn't need to care about the shape — it reports
+    // every cause and the boundary decides whether that cause
+    // actually belongs in the signal.
+    const service: ErrorBoundaryService = {
+      report: (cause: Cause.Cause<unknown>) =>
+        Effect.gen(function* () {
+          const hasFailure = Option.isSome(Cause.failureOption(cause));
+          const hasDefect = Option.isSome(Cause.dieOption(cause));
+          if (hasFailure || (hasDefect && catchDefects)) {
+            yield* errors.set(Option.some(cause as Cause.Cause<E>));
+          }
+        }),
+      clear: errors.set(Option.none()),
+    };
+
+    // Attempt the initial render once up front. matchOption's reactive
+    // swap only reacts to signal changes AFTER its own subscription
+    // starts, so a failure during matchOption's initial `onNone`
+    // slot can't swap in-place to `onSome`. Running `tryRender` here
+    // lets us set the signal synchronously (so matchOption's initial
+    // read picks the right branch) and reuse the already-mounted
+    // node when `tryRender` succeeded.
+    const initialResult = yield* tryRender().pipe(
+      Effect.provideService(ErrorBoundaryCtx, service),
+      Effect.either,
+    );
+    // One-shot cache so matchOption's first `onNone` evaluation
+    // returns the node we already mounted; later evaluations (after
+    // a recovery) run `tryRender` fresh for a clean remount.
+    let primed: { node: N } | null = null;
+    if (Either.isLeft(initialResult)) {
+      yield* errors.set(Option.some(Cause.fail(initialResult.left)));
+    } else {
+      primed = { node: initialResult.right };
+    }
+
+    return yield* matchOption(errors, {
+      onSome: (causeReadable) =>
+        Effect.gen(function* () {
+          const cause = yield* causeReadable.get;
+          return yield* catchRender(extractError(cause as Cause.Cause<E>));
+        }) as unknown as Element.Element<N, never, R2>,
+      onNone: () =>
+        Effect.gen(function* () {
+          if (primed) {
+            const node = primed.node;
+            primed = null; // consume
+            return node;
+          }
+          // Second+ time through onNone: the previous child was
+          // unmounted when matchOption swapped to onSome; now we're
+          // recovering, so run `tryRender` fresh for a clean mount.
+          return yield* tryRender().pipe(
+            Effect.provideService(ErrorBoundaryCtx, service),
+          );
+        }) as unknown as Element.Element<N, never, R1>,
+    }) as unknown as Element.Element<N, never, ControlCtx | R1 | R2>;
+  });
+};
+
+/**
+ * Pull the user-facing error value out of a `Cause`. Prefers the
+ * typed `Fail` failure; falls back to the `Die` defect's value when
+ * `catchDefects` was true. Used only inside `Boundary.error` — the
+ * `undefined` branch is unreachable because the boundary only writes
+ * causes that contain at least one of the two.
+ */
+const extractError = <E>(cause: Cause.Cause<E>): E => {
+  const failure = Cause.failureOption(cause);
+  if (Option.isSome(failure)) return failure.value;
+  const die = Cause.dieOption(cause);
+  return (Option.isSome(die) ? die.value : undefined) as E;
+};
 
 /**
  * Boundary namespace for error and async handling.
