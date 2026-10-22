@@ -674,7 +674,10 @@ describe("Control", () => {
 
           // Pre-decorate row "1" with an inline transform the user
           // set themselves. FLIP must leave this intact after release.
-          const rowOne = el.querySelector(
+          // Query from body — `el` is a sentinel-anchored DocumentFragment
+          // and after appendChild its slots live under body as the
+          // sentinels' siblings; the fragment itself is empty.
+          const rowOne = document.body.querySelector(
             '[data-id="1"]',
           ) as HTMLElement | null;
           if (!rowOne) throw new Error("row 1 not found");
@@ -811,19 +814,22 @@ describe("Control", () => {
           onFalse: () => $.div({}, "List hidden"),
         });
 
-        // el = when's container, el.children[0] = div from onTrue
-        // el.children[0].children[0] = each's container
-        expect(el.children.length).toBe(1);
+        // el is `when`'s result (a sentinel-anchored fragment that has
+        // been inlined into whatever appended it — here, nothing has,
+        // so the sentinels still live in the fragment). The onTrue
+        // branch rendered a $.div which IS a real element; it contains
+        // the inner `each`'s slots (span elements), with the each's
+        // sentinel comments as siblings. Comment nodes don't show up
+        // under `.children`, so each slot's span is a direct child of
+        // the onTrue div.
         const divWrapper = el.children[0];
-        expect(divWrapper.children.length).toBe(1);
-        const eachContainer = divWrapper.children[0];
-        expect(eachContainer.children.length).toBe(2);
-        expect(eachContainer.children[0].textContent).toBe("Alice");
+        expect(divWrapper.children.length).toBe(2);
+        expect(divWrapper.children[0].textContent).toBe("Alice");
 
         yield* Effect.sleep("20 millis");
         yield* items.update((list) => [...list, { id: "3", name: "Charlie" }]);
         yield* Effect.sleep("20 millis");
-        expect(eachContainer.children.length).toBe(3);
+        expect(divWrapper.children.length).toBe(3);
 
         yield* showList.set(false);
         yield* Effect.sleep("20 millis");
@@ -1024,10 +1030,13 @@ describe("Control", () => {
           ),
         );
 
-        // when's container and each's container
-        expect(el.children.length).toBe(2);
+        // Sentinels are comments and don't appear in `.children` — the
+        // observable elements are the h1 from `when` plus the two li's
+        // from `each`, flattened as direct children of the outer div.
+        expect(el.children.length).toBe(3);
         expect(el.children[0].textContent).toBe("Header");
-        expect(el.children[1].children.length).toBe(2);
+        expect(el.children[1].textContent).toBe("a");
+        expect(el.children[2].textContent).toBe("b");
 
         yield* Effect.sleep("20 millis");
         yield* showHeader.set(false);
@@ -1035,7 +1044,8 @@ describe("Control", () => {
         yield* Effect.sleep("20 millis");
 
         expect(el.children[0].textContent).toBe("No Header");
-        expect(el.children[1].children.length).toBe(3);
+        expect(el.children.length).toBe(4);
+        expect(el.children[3].textContent).toBe("c");
       }).pipe(Effect.provide(TestLayer)),
     );
   });

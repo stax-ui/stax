@@ -58,6 +58,22 @@ export interface Renderer<Node> {
   readonly createTextNode: (text: string) => Effect.Effect<Node>;
 
   /**
+   * Create a comment node with the given content. Used by sentinel-anchored
+   * control-flow containers to delimit the group of slot nodes they manage.
+   * Non-DOM renderers (SSR) produce a comment vnode that serializes to
+   * `<!--content-->`.
+   */
+  readonly createComment: (content: string) => Effect.Effect<Node>;
+
+  /**
+   * Create an empty fragment node. Appending a fragment to a parent flattens
+   * its children into the parent (DOM semantics); SSR mirrors this via
+   * `VFragment`. Used by control-flow containers to return a sentinel-wrapped
+   * slot group without introducing a wrapper element in the output.
+   */
+  readonly createFragment: () => Effect.Effect<Node>;
+
+  /**
    * Append a child node to a parent node.
    */
   readonly appendChild: (parent: Node, child: Node) => Effect.Effect<void>;
@@ -211,6 +227,53 @@ export interface Renderer<Node> {
    * No-op for renderers that don't maintain a traversal stack.
    */
   readonly pushHydrationParent: (node: Node) => Effect.Effect<void>;
+
+  /**
+   * Hydration fast path: given a pre-resolved node (e.g. looked up in
+   * `O(1)` from the hydration-id pre-index), advance the walker as if
+   * `createNode` had just found it, then push it as a new parent frame
+   * for subsequent child walking.
+   *
+   * Combines two operations atomically: scan forward in the current
+   * parent's children until we hit the given node (so sibling lookups
+   * resume after it), then push it onto the parent stack. Replaces the
+   * `createNode(type) + pushHydrationParent(container)` pair used by the
+   * slow (positional-walking) path.
+   *
+   * No-op on renderers that don't maintain a traversal stack. If the
+   * node is not found at or after the current parent cursor, the walker
+   * is unchanged — callers should treat that as a hydration mismatch
+   * and fall back to the slow path.
+   *
+   * Pair with `finalizeNode(node)` to pop, same as `createNode`.
+   */
+  readonly enterPreresolvedNode: (node: Node) => Effect.Effect<void>;
+
+  /**
+   * Hydration fast path for sentinel-anchored control containers.
+   * Advance the current parent cursor past `start` (a `<!--$stax-N-->`
+   * comment resolved via the pre-index) without pushing a new parent
+   * frame — the slots of a sentinel-anchored control are *siblings*
+   * of the sentinel pair, not children, so slot renders should keep
+   * walking in the same parent context.
+   *
+   * Pair with `exitSentinelAnchor(end)` at the end of the control's
+   * initial sync to skip the walker cursor past the end sentinel so
+   * surrounding siblings resume walking from the right position.
+   *
+   * No-op on renderers that don't maintain a traversal stack.
+   */
+  readonly enterSentinelAnchor: (start: Node) => Effect.Effect<void>;
+
+  /**
+   * Hydration fast path for sentinel-anchored control containers.
+   * Advance the current parent cursor past `end` (a `<!--/stax-N-->`
+   * comment) so sibling walking resumes after the control's slot
+   * group. Pair with a preceding `enterSentinelAnchor(start)`.
+   *
+   * No-op on renderers that don't maintain a traversal stack.
+   */
+  readonly exitSentinelAnchor: (end: Node) => Effect.Effect<void>;
 
   /**
    * Create a slot for swappable content.

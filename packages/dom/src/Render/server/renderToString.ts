@@ -54,6 +54,13 @@ const renderVNode = (node: VNode): string => {
     case "VComment":
       return `<!--${node.content}-->`;
 
+    case "VFragment":
+      // Fragments inline their children — append-time flattening in
+      // StringRenderer usually drains them, but a fragment that reaches the
+      // serializer (e.g. one returned directly from a renderToString call)
+      // still serializes as its contents.
+      return node.children.map(renderVNode).join("");
+
     case "VElement": {
       const elem = node as VElement;
       const attrs = renderAttributes(elem.attributes);

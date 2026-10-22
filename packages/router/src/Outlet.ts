@@ -433,6 +433,15 @@ export const Outlet = <
       // `transitionRef` at animation-fire time — a stable Ctx
       // provision pointing at a rotating pair.
       const reconciled = reconcile(nav.pathname, {
+        // Outlet needs a real element container, not the default
+        // sentinel-anchored fragment. `bindElementToRef` below writes
+        // the result into `containerRef`, which `findScrollRoot` then
+        // walks via `parentElement` — a fragment has none post-mount
+        // (its children are flattened out) and can't carry a className
+        // or `getBoundingClientRect`. The explicit `display: contents`
+        // keeps the wrapper out of layout flow, same shape as the
+        // historical control-flow default container.
+        container: () => $.div({ style: { display: "contents" } }),
         getTargetKeys: (pathname: string) => {
           const matched = findMatch(router, pathname);
           if (Option.isSome(matched)) return [pathname];

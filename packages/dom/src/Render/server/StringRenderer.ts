@@ -6,16 +6,58 @@ import { warnIfInvalidNesting } from "../validateNesting.js";
 import {
   vComment,
   vElement,
+  vFragment,
   vText,
   type VElement,
+  type VFragment,
   type VNode,
   type VText,
 } from "./VNode.js";
 
+/** A VNode that can hold children — the only parents our mutation ops accept. */
+type VContainer = VElement | VFragment;
+
+const isContainer = (node: VNode): node is VContainer =>
+  node._tag === "VElement" || node._tag === "VFragment";
+
 /**
- * Renderer implementation that produces VNodes for SSR.
- * VNodes are then serialized to HTML strings via vnodeToString.
+ * Attach `child` into `parent.children` at `index` (or push if negative).
+ * If `child` is a VFragment, flatten its children in-place at that insertion
+ * point — DOM `appendChild(fragment)` semantics.
  */
+const spliceChild = (
+  parent: VContainer,
+  child: VNode,
+  index: number,
+): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    if (child._tag === "VFragment") {
+      const kids = child.children.slice();
+      child.children.length = 0;
+      let cursor = index < 0 ? parent.children.length : index;
+      for (const grandChild of kids) {
+        yield* spliceChild(parent, grandChild, cursor);
+        cursor++;
+      }
+      return;
+    }
+
+    if (parent._tag === "VElement" && child._tag === "VElement") {
+      yield* warnIfInvalidNesting(parent.type, child.type);
+    }
+
+    if (index < 0) {
+      parent.children.push(child);
+    } else {
+      parent.children.splice(index, 0, child);
+    }
+
+    // Track parent reference for slot markers (used by SSR `createSlot`).
+    if (child._tag === "VComment") {
+      (child as unknown as { _parent?: VContainer })._parent = parent;
+    }
+  });
+
 export const StringRenderer: Renderer<VNode> = {
   environment: "ssr",
   createNode: (type: string, _namespace?: string) =>
@@ -23,58 +65,33 @@ export const StringRenderer: Renderer<VNode> = {
 
   createTextNode: (text: string) => Effect.sync(() => vText(text)),
 
+  createComment: (content: string) => Effect.sync(() => vComment(content)),
+
+  createFragment: () => Effect.sync(() => vFragment()),
+
   appendChild: (parent: VNode, child: VNode) =>
-    Effect.gen(function* () {
-      if (parent._tag === "VElement") {
-        if (child._tag === "VElement") {
-          yield* warnIfInvalidNesting(parent.type, child.type);
-        }
-        parent.children.push(child);
-        // Track parent reference for slot markers
-        if (child._tag === "VComment") {
-          (child as unknown as { _parent?: VElement })._parent = parent;
-        }
-      }
-    }),
+    isContainer(parent) ? spliceChild(parent, child, -1) : Effect.void,
 
   removeChild: (parent: VNode, child: VNode) =>
     Effect.sync(() => {
-      if (parent._tag === "VElement") {
-        const index = parent.children.indexOf(child);
-        if (index > -1) {
-          parent.children.splice(index, 1);
-        }
-      }
+      if (!isContainer(parent)) return;
+      const index = parent.children.indexOf(child);
+      if (index > -1) parent.children.splice(index, 1);
     }),
 
   replaceChild: (parent: VNode, newChild: VNode, oldChild: VNode) =>
     Effect.sync(() => {
-      if (parent._tag === "VElement") {
-        const index = parent.children.indexOf(oldChild);
-        if (index > -1) {
-          parent.children[index] = newChild;
-        }
-      }
+      if (!isContainer(parent)) return;
+      const index = parent.children.indexOf(oldChild);
+      if (index > -1) parent.children[index] = newChild;
     }),
 
   insertBefore: (parent: VNode, child: VNode, reference: VNode | null) =>
-    Effect.sync(() => {
-      if (parent._tag === "VElement") {
-        if (reference === null) {
-          parent.children.push(child);
-        } else {
-          const index = parent.children.indexOf(reference);
-          if (index > -1) {
-            parent.children.splice(index, 0, child);
-          } else {
-            parent.children.push(child);
-          }
-        }
-        // Track parent reference for slot markers
-        if (child._tag === "VComment") {
-          (child as unknown as { _parent?: VElement })._parent = parent;
-        }
-      }
+    Effect.gen(function* () {
+      if (!isContainer(parent)) return;
+      const index =
+        reference === null ? -1 : parent.children.indexOf(reference);
+      yield* spliceChild(parent, child, index);
     }),
 
   setAttribute: (node: VNode, key: string, value: unknown) =>
@@ -203,7 +220,7 @@ export const StringRenderer: Renderer<VNode> = {
     Effect.void,
 
   getChildren: (node: VNode) =>
-    Effect.sync(() => (node._tag === "VElement" ? node.children : [])),
+    Effect.sync(() => (isContainer(node) ? node.children : [])),
 
   hydrationPhase: Readable.of(false),
 
@@ -212,6 +229,12 @@ export const StringRenderer: Renderer<VNode> = {
   finalizeNode: () => Effect.void,
 
   pushHydrationParent: () => Effect.void,
+
+  enterPreresolvedNode: () => Effect.void,
+
+  enterSentinelAnchor: () => Effect.void,
+
+  exitSentinelAnchor: () => Effect.void,
 
   createSlot: () =>
     Effect.sync((): Slot<VNode> => {

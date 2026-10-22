@@ -29,6 +29,11 @@ export const DOMRenderer: Renderer<Node> = {
   createTextNode: (text: string) =>
     Effect.sync(() => document.createTextNode(text)),
 
+  createComment: (content: string) =>
+    Effect.sync(() => document.createComment(content)),
+
+  createFragment: () => Effect.sync(() => document.createDocumentFragment()),
+
   appendChild: (parent: Node, child: Node) =>
     Effect.gen(function* () {
       yield* warnIfInvalidNesting(tagNameOf(parent), tagNameOf(child));
@@ -135,6 +140,12 @@ export const DOMRenderer: Renderer<Node> = {
   finalizeNode: () => Effect.void,
 
   pushHydrationParent: () => Effect.void,
+
+  enterPreresolvedNode: () => Effect.void,
+
+  enterSentinelAnchor: () => Effect.void,
+
+  exitSentinelAnchor: () => Effect.void,
 
   createSlot: () =>
     Effect.sync((): Slot<Node> => {

@@ -112,6 +112,11 @@ export const createHydrationRenderer = (
         return node;
       }),
 
+    createComment: (content: string) =>
+      Effect.sync(() => document.createComment(content)),
+
+    createFragment: () => Effect.sync(() => document.createDocumentFragment()),
+
     createTextNode: (text: string) =>
       Effect.sync(() => {
         const ctx = getCurrentContext();
@@ -320,6 +325,74 @@ export const createHydrationRenderer = (
         // container. Push a fresh frame at childIndex 0 so the next
         // createNode call finds children in the right parent.
         parentStack.push({ parent: node, childIndex: 0 });
+      }),
+
+    enterPreresolvedNode: (node: Node) =>
+      Effect.sync(() => {
+        // Fast path for ID-based container lookup: given a node resolved
+        // via the hydration pre-index, do two things atomically:
+        //   1. Advance the current parent's cursor past `node` so sibling
+        //      lookups resume after it.
+        //   2. Push `node` as a new parent frame so subsequent child
+        //      lookups walk inside it.
+        //
+        // Replaces the `createNode(type) + pushHydrationParent(container)`
+        // pair that the slow (positional-walk) path uses. The caller
+        // already knows which node to use, so there's no sibling scan.
+        const ctx = getCurrentContext();
+        const children = ctx.parent.childNodes;
+        // Scan forward from the cursor to locate `node`. In well-formed
+        // SSR, `node` is at or just past the current index — but there
+        // may be whitespace or comment siblings between the cursor and
+        // the target node that we need to step over. If we reach the
+        // end without finding `node`, treat it as a mismatch: leave the
+        // cursor alone (callers can fall back) but still push the node
+        // so children can hydrate against it.
+        for (let i = ctx.childIndex; i < children.length; i++) {
+          if (children[i] === node) {
+            ctx.childIndex = i + 1;
+            break;
+          }
+        }
+        parentStack.push({ parent: node, childIndex: 0 });
+      }),
+
+    enterSentinelAnchor: (start: Node) =>
+      Effect.sync(() => {
+        // Sentinel-anchored control: `start` is the `<!--$stax-N-->`
+        // comment, resolved via the hydration pre-index. The slots this
+        // control manages are *siblings* of the sentinel (not children),
+        // so just advance the current parent's cursor past `start` and
+        // leave the stack where it is. Subsequent createNode calls from
+        // the control's slot renders scan forward in the same frame and
+        // find the slot elements between `start` and the matching end.
+        const ctx = getCurrentContext();
+        const children = ctx.parent.childNodes;
+        for (let i = ctx.childIndex; i < children.length; i++) {
+          if (children[i] === start) {
+            ctx.childIndex = i + 1;
+            return;
+          }
+        }
+        // Mismatch — cursor already past where the sentinel should be.
+        // The surrounding control's addSlot renders will fall back to
+        // mismatch recovery (createNode's createElement path).
+      }),
+
+    exitSentinelAnchor: (end: Node) =>
+      Effect.sync(() => {
+        // Advance the current parent cursor past the end sentinel so
+        // surrounding siblings resume walking from the correct position.
+        // Paired with `enterSentinelAnchor(start)` at the start of the
+        // control's initial sync.
+        const ctx = getCurrentContext();
+        const children = ctx.parent.childNodes;
+        for (let i = ctx.childIndex; i < children.length; i++) {
+          if (children[i] === end) {
+            ctx.childIndex = i + 1;
+            return;
+          }
+        }
       }),
 
     createSlot: () =>
