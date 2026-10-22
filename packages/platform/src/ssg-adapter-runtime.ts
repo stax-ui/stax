@@ -108,17 +108,42 @@ const substituteParams = (
   return result;
 };
 
+const pageDir = (outDir: string, url: string): string =>
+  url === "/" || url === "" ? outDir : path.join(outDir, url);
+
 const writeHtml = async (
   outDir: string,
   url: string,
   html: string,
 ): Promise<void> => {
-  const filePath =
-    url === "/" || url === ""
-      ? path.join(outDir, "index.html")
-      : path.join(outDir, url, "index.html");
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, html, "utf-8");
+  const dir = pageDir(outDir, url);
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(path.join(dir, "index.html"), html, "utf-8");
+};
+
+/**
+ * Write the loader data as a sibling `_data.json` next to the page's
+ * `index.html`. Client-side navigation (`makeClientLayer`'s
+ * `RouteDataProvider`) fetches this file instead of relying on the
+ * host to return JSON for `?_data=1` — static hosts typically ignore
+ * query strings and serve the HTML, which the client would then have
+ * to regex-extract. The sibling JSON is a stable, cacheable endpoint
+ * that any file server returns verbatim.
+ *
+ * The JSON content comes from firing a synthetic `?_data=1` request
+ * at the same handler the HTML pass used — the handler's existing
+ * data-request branch already returns the right JSON shape, so we
+ * don't have to parse out of the HTML or re-run the loader
+ * ourselves.
+ */
+const writeDataJson = async (
+  outDir: string,
+  url: string,
+  json: string,
+): Promise<void> => {
+  const dir = pageDir(outDir, url);
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(path.join(dir, "_data.json"), json, "utf-8");
 };
 
 export const runSsgBuild = async (
@@ -155,7 +180,7 @@ export const runSsgBuild = async (
     : HttpApp.toWebHandler(app as Parameters<typeof HttpApp.toWebHandler>[0]);
 
   const routes = options.router.routes as readonly StaxRoute[];
-  const pages: Array<{ url: string; html: string }> = [];
+  const pages: Array<{ url: string; html: string; data?: string }> = [];
 
   // Static routes — each one may expand to multiple pages via `paths()`.
   for (const route of routes) {
@@ -172,14 +197,48 @@ export const runSsgBuild = async (
 
     for (const params of paramSets) {
       const url = substituteParams(route.path, params);
-      const response = await handler(new Request(`http://localhost${url}`));
-      const html = await response.text();
-      pages.push({ url, html });
+
+      // HTML pass.
+      const htmlResponse = await handler(new Request(`http://localhost${url}`));
+      const html = await htmlResponse.text();
+
+      // Data pass. The handler's `?_data=1` branch returns the loader
+      // output as JSON — same shape as the colocated file we want to
+      // emit. If the pass fails for any reason (route has no loader
+      // and the handler 404s on data requests, say), we just skip the
+      // JSON write for that page; the HTML still gets written and
+      // client navigation falls back to the historical `?_data=1`
+      // path on the live server.
+      let data: string | undefined;
+      try {
+        const dataResponse = await handler(
+          new Request(`http://localhost${url}?_data=1`),
+        );
+        if (
+          dataResponse.ok &&
+          (dataResponse.headers.get("content-type") ?? "")
+            .toLowerCase()
+            .includes("json")
+        ) {
+          data = await dataResponse.text();
+        }
+      } catch {
+        // Non-fatal — fall through without writing JSON.
+      }
+
+      pages.push({ url, html, data });
     }
   }
 
   // Write all static pages to disk in parallel.
-  await Promise.all(pages.map((p) => writeHtml(outDirAbs, p.url, p.html)));
+  await Promise.all(
+    pages.flatMap((p) => [
+      writeHtml(outDirAbs, p.url, p.html),
+      p.data !== undefined
+        ? writeDataJson(outDirAbs, p.url, p.data)
+        : Promise.resolve(),
+    ]),
+  );
 
   // 404 page — fire a request at a URL that definitely won't match any
   // real route and let the router's fallback render it.
