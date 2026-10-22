@@ -55,7 +55,9 @@ export class RouteDataContext extends Context.Tag("@stax-ui/router/RouteData")<
  *
  * Platform provides implementations:
  * - Server: executes the loader directly
- * - Client (hydration): reads from `window.__STAX_DATA__`
+ * - Client (hydration): reads the embedded `<script type="application/json"
+ *   id="__stax_data">` block (or the legacy `window.__STAX_DATA__` global
+ *   for one migration cycle)
  * - Client (navigation): fetches from server via `?_data=1`
  */
 export interface RouteDataProviderService {

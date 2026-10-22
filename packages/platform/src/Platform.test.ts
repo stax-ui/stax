@@ -11,28 +11,61 @@ import { Route, Router } from "@stax-ui/router";
 import {
   buildStaticSite,
   generateDocument,
+  generateLoaderDataScript,
   serializeForHtml,
 } from "./Platform.js";
 
 /**
- * The extractEmbeddedRouteData helper lives inline in Platform.ts. We
- * duplicate the same regex here to keep the test coupled to the emitted
- * script shape rather than to the private helper.
+ * The real `extractEmbeddedRouteData` helper lives inline in
+ * `Platform.ts`. Duplicating it here keeps the test coupled to the
+ * emitted script shape rather than to the private helper's identity
+ * — both the current `type="application/json"` block and the legacy
+ * `<script>window.__STAX_DATA__=…</script>` form must round-trip
+ * cleanly during the migration window.
  */
 const extractEmbeddedRouteData = (html: string): unknown => {
-  const match = html.match(
+  const jsonMatch = html.match(
+    /<script\b[^>]*\bid=["']__stax_data["'][^>]*>\s*([\s\S]+?)\s*<\/script>/,
+  );
+  if (jsonMatch) {
+    try {
+      return JSON.parse(jsonMatch[1]);
+    } catch {
+      // fall through
+    }
+  }
+  const legacyMatch = html.match(
     /<script[^>]*>\s*window\.__STAX_DATA__\s*=\s*(.+?)\s*<\/script>/s,
   );
-  if (!match) return undefined;
+  if (!legacyMatch) return undefined;
   try {
-    return JSON.parse(match[1]);
+    return JSON.parse(legacyMatch[1]);
   } catch {
     return undefined;
   }
 };
 
+describe("generateLoaderDataScript", () => {
+  it('emits a non-executable `type="application/json"` data block', () => {
+    // The whole point of the new shape — CSP's `script-src` doesn't
+    // apply to non-JS script types, so this works under
+    // `script-src 'self'` with no nonces and no hashes.
+    const script = generateLoaderDataScript({ data: { name: "Jon" } });
+    expect(script).toContain('type="application/json"');
+    expect(script).toContain('id="__stax_data"');
+    // Confirming no executable form sneaked in.
+    expect(script).not.toContain("window.__STAX_DATA__");
+  });
+
+  it("returns an empty string for empty loader data", () => {
+    // No block means nothing to parse at hydration time, so the
+    // `undefined` branch in the client reader is exercised legitimately.
+    expect(generateLoaderDataScript({})).toBe("");
+  });
+});
+
 describe("static-host data fallback (makeClientLayer)", () => {
-  it("extracts the embedded __STAX_DATA__ blob from generateDocument output", () => {
+  it("extracts the embedded data block from generateDocument output", () => {
     const payload = { data: { name: "Jon" }, actions: {} };
     const html = generateDocument("<div>hi</div>", payload);
 
@@ -42,7 +75,8 @@ describe("static-host data fallback (makeClientLayer)", () => {
 
   it("survives payloads with script-breaking characters", () => {
     // These are exactly the characters serializeForHtml escapes — the round
-    // trip has to preserve them.
+    // trip has to preserve them. The `</script>` string specifically must
+    // not break out of the data block.
     const payload = {
       data: {
         html: "<script>alert('xss')</script>",
@@ -57,14 +91,38 @@ describe("static-host data fallback (makeClientLayer)", () => {
     expect(extracted).toEqual(payload);
   });
 
-  it("returns undefined when no __STAX_DATA__ script is present", () => {
+  it("returns undefined when no data block is present", () => {
     const html = "<html><body><div>no data here</div></body></html>";
     expect(extractEmbeddedRouteData(html)).toBeUndefined();
   });
 
-  it("returns undefined when the script content is malformed JSON", () => {
-    const html = "<script>window.__STAX_DATA__=not-json</script>";
+  it("returns undefined when the data block content is malformed JSON", () => {
+    const html =
+      '<script type="application/json" id="__stax_data">not-json</script>';
     expect(extractEmbeddedRouteData(html)).toBeUndefined();
+  });
+
+  it("still extracts legacy `window.__STAX_DATA__` output", () => {
+    // Migration-window compat: a client deployed BEFORE its HTML
+    // was regenerated must still hydrate. One minor cycle, then
+    // we drop the legacy regex.
+    const payload = { data: { name: "Jon" }, actions: {} };
+    const legacyHtml =
+      "<html><body><script>window.__STAX_DATA__=" +
+      serializeForHtml(payload) +
+      "</script></body></html>";
+    expect(extractEmbeddedRouteData(legacyHtml)).toEqual(payload);
+  });
+
+  it("prefers the new data block when both shapes are present", () => {
+    // Defensive: we tolerate both during the migration, but the new
+    // block is authoritative when the page carries both.
+    const authoritative = { data: { from: "json-block" }, actions: {} };
+    const legacy = { data: { from: "legacy-global" }, actions: {} };
+    const mixed =
+      `<script type="application/json" id="__stax_data">${serializeForHtml(authoritative)}</script>` +
+      `<script>window.__STAX_DATA__=${serializeForHtml(legacy)}</script>`;
+    expect(extractEmbeddedRouteData(mixed)).toEqual(authoritative);
   });
 
   it("handles the exact serializeForHtml output format", () => {

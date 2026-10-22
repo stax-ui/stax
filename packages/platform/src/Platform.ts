@@ -119,13 +119,36 @@ export const serializeForHtml = (data: unknown): string => {
 };
 
 /**
- * Generate the script tag for embedding loader data
+ * Generate the script tag for embedding loader data.
+ *
+ * Emits a `type="application/json"` data block (NOT an executable
+ * script):
+ *
+ * ```html
+ * <script type="application/json" id="__stax_data">{...}</script>
+ * ```
+ *
+ * **Why this shape:** the browser never *executes* a non-JS script
+ * type, so this element isn't subject to `script-src` under a CSP
+ * policy. SSG output can run under a plain `script-src 'self'` with
+ * no nonces and no inline-script hashes; strict `script-src 'nonce-…'
+ * 'strict-dynamic'` on SSR also works since nothing here needs
+ * executing.
+ *
+ * **Historical format:** earlier versions emitted
+ * `<script>window.__STAX_DATA__=…</script>`, which executed inline.
+ * The hydration reader and the HTML-extraction fallback both
+ * continue to accept that shape through the next minor so rolling
+ * deploys (new client hitting a cached old HTML) still hydrate; the
+ * SSR output itself is new-format only.
  */
 export const generateLoaderDataScript = (
   loaderData: Record<string, unknown>,
 ): string => {
   if (Object.keys(loaderData).length === 0) return "";
-  return `<script>window.__STAX_DATA__=${serializeForHtml(loaderData)}</script>`;
+  return `<script type="application/json" id="__stax_data">${serializeForHtml(
+    loaderData,
+  )}</script>`;
 };
 
 /**
@@ -637,15 +660,20 @@ export const toHttpRoutes = <
 // =============================================================================
 
 declare const window: Window & {
+  // Legacy global — populated only by builds that still emit the
+  // historical `<script>window.__STAX_DATA__=...</script>` shape.
+  // Read as a fallback for one minor cycle; see
+  // `extractEmbeddedRouteData` and the first-load hydration branch.
   __STAX_DATA__?: Record<string, unknown>;
 };
 
 /**
  * Create a client-side Layer that provides NavigationContext and RouteDataProvider.
  *
- * On the first call (hydration), reads data from `window.__STAX_DATA__`.
- * On subsequent calls (client-side navigation), fetches from the server
- * via `?_data=1`.
+ * On the first call (hydration), reads data from the embedded SSR
+ * `<script type="application/json" id="__stax_data">` block (or the
+ * legacy `window.__STAX_DATA__` global for one minor cycle). On
+ * subsequent calls (client-side navigation), fetches from the server.
  *
  * @example
  * ```ts
@@ -663,21 +691,64 @@ declare const window: Window & {
  * ```
  */
 /**
- * Extract embedded `window.__STAX_DATA__` from a page's HTML.
+ * Read the embedded hydration data from the current document. Prefers
+ * the new `<script type="application/json" id="__stax_data">` block;
+ * falls back to the legacy `window.__STAX_DATA__` global for rolling
+ * deploys where a cached old HTML hits a new client bundle.
  *
- * SSG deploys serve the same HTML for `<path>` and `<path>?_data=1`, so when
- * `makeClientLayer`'s data fetch gets HTML back, we scan for the loader-data
- * `<script>` tag emitted by {@link generateLoaderDataScript}. The JSON inside
- * uses \\uXXXX escapes for script-breaking characters (see {@link serializeForHtml}),
- * which JSON.parse handles natively.
+ * Called once at hydration time by `makeClientLayer`'s first-load
+ * branch. Returns `undefined` when neither is present, which is the
+ * legitimate state for routes with no loader data.
+ */
+const readEmbeddedHydrationData = (): Record<string, unknown> | undefined => {
+  if (typeof document !== "undefined") {
+    const el = document.getElementById("__stax_data");
+    if (el?.textContent) {
+      try {
+        return JSON.parse(el.textContent) as Record<string, unknown>;
+      } catch {
+        // Fall through to the window global.
+      }
+    }
+  }
+  return typeof window !== "undefined" ? window.__STAX_DATA__ : undefined;
+};
+
+/**
+ * Extract the embedded hydration data block from a page's HTML.
+ *
+ * SSG deploys serve the same HTML for `<path>` and `<path>?_data=1`,
+ * so when `makeClientLayer`'s data fetch gets HTML back, we scan for
+ * the loader-data `<script>` block emitted by
+ * {@link generateLoaderDataScript}. Accepts both the current shape
+ * (`<script type="application/json" id="__stax_data">…</script>`) and
+ * the legacy executable form
+ * (`<script>window.__STAX_DATA__=…</script>`) during the migration
+ * window — a client deployed before its HTML was regenerated still
+ * hydrates. The JSON uses `\\uXXXX` escapes for script-breaking
+ * characters (see {@link serializeForHtml}), which `JSON.parse`
+ * handles natively.
  */
 const extractEmbeddedRouteData = (html: string): unknown => {
-  const match = html.match(
+  // Preferred shape — `type="application/json"` data block. Any
+  // attribute order; required id anchors the match.
+  const jsonMatch = html.match(
+    /<script\b[^>]*\bid=["']__stax_data["'][^>]*>\s*([\s\S]+?)\s*<\/script>/,
+  );
+  if (jsonMatch) {
+    try {
+      return JSON.parse(jsonMatch[1]);
+    } catch {
+      // Fall through — maybe the legacy form is also present.
+    }
+  }
+  // Legacy executable form.
+  const legacyMatch = html.match(
     /<script[^>]*>\s*window\.__STAX_DATA__\s*=\s*(.+?)\s*<\/script>/s,
   );
-  if (!match) return undefined;
+  if (!legacyMatch) return undefined;
   try {
-    return JSON.parse(match[1]);
+    return JSON.parse(legacyMatch[1]);
   } catch {
     return undefined;
   }
@@ -709,12 +780,12 @@ export const makeClientLayer = <
             if (first) {
               yield* Ref.set(isFirstLoad, false);
 
-              // Hydration: read embedded data from SSR
-              const embedded =
-                typeof window !== "undefined"
-                  ? window.__STAX_DATA__
-                  : undefined;
-
+              // Hydration: read the embedded SSR blob. Prefers the
+              // non-executable `type="application/json"` block;
+              // falls back to the legacy `window.__STAX_DATA__`
+              // global for rolling deploys where cached old HTML
+              // hits a new client.
+              const embedded = readEmbeddedHydrationData();
               if (embedded) {
                 return embedded as unknown as RouteDataService;
               }
@@ -801,8 +872,10 @@ export const makeClientLayer = <
               // Not fatal — some routes may legitimately have no loader data
               // — but log it so a broken build/deploy doesn't sit invisible.
               yield* Console.warn(
-                `[@stax-ui/platform] Fetched HTML for ${path} but couldn't find window.__STAX_DATA__. ` +
-                  `Continuing with data: undefined. (Does your SSG build emit \`_data.json\` siblings?)`,
+                `[@stax-ui/platform] Fetched HTML for ${path} but couldn't ` +
+                  `find an embedded hydration data block (expected a ` +
+                  `<script type="application/json" id="__stax_data">). ` +
+                  `Continuing with data: undefined.`,
               );
             }
             return {
