@@ -24,6 +24,22 @@ export const parseClasses = (classes: string): string[] =>
     .filter((c) => c.length > 0);
 
 /**
+ * Collapse a list of space-separated class groups (any of which may be
+ * `undefined`) into a flat array of individual classes. Removes the
+ * group→class→class nested-iteration pattern at every call site.
+ */
+export const flattenGroups = (
+  groups: readonly (string | undefined)[],
+): string[] => {
+  const out: string[] = [];
+  for (const g of groups) {
+    if (!g) continue;
+    for (const c of parseClasses(g)) out.push(c);
+  }
+  return out;
+};
+
+/**
  * Parse a CSS time-list value (e.g. "0.15s, 0s, 300ms") to the maximum
  * duration in seconds. Returns 0 for an empty/invalid input.
  */

@@ -4,6 +4,7 @@ import { logDebug } from "@stax-ui/core";
 
 import * as Element from "../Element/index.js";
 import {
+  flattenGroups,
   parseClasses,
   prefersReducedMotion,
   runHook,
@@ -157,20 +158,6 @@ const runAnimation = <E, R>(
       ),
     );
   }) as Effect.Effect<void, E, R>;
-
-/**
- * Collapse a list of space-separated class groups (any of which may be
- * `undefined`) into a flat array of individual classes. Removes the
- * group→class→class nested-iteration pattern at every call site.
- */
-const flattenGroups = (groups: readonly (string | undefined)[]): string[] => {
-  const out: string[] = [];
-  for (const g of groups) {
-    if (!g) continue;
-    for (const c of parseClasses(g)) out.push(c);
-  }
-  return out;
-};
 
 /**
  * Run an enter animation on an element.
