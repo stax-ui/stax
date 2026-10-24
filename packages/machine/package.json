@@ -45,7 +45,7 @@
   },
   "peerDependencies": {
     "effect": "^3.0.0",
-    "@stax-ui/core": "workspace:^"
+    "@stax-ui/core": "workspace:>=0.1.0 <1.0.0"
   },
   "peerDependenciesMeta": {
     "@stax-ui/core": {
