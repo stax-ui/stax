@@ -191,6 +191,6 @@ hydrate(App(), document.getElementById("root")!, {
 `makeClientLayer` provides two things:
 
 1. **NavigationContext** — browser history management and route matching
-2. **RouteDataProvider** — on the first load (hydration), reads data from `window.__STAX_DATA__` embedded by the server. On subsequent navigations, fetches from the server via `?_data=1`
+2. **RouteDataProvider** — on the first load (hydration), reads data from the embedded `<script type="application/json" id="__stax_data">` block. On subsequent navigations, fetches from the server via `?_data=1`
 
 After hydration, all navigation is client-side. Only data is fetched from the server — no full page reloads.

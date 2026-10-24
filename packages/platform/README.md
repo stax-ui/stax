@@ -268,7 +268,7 @@ dist/
 
 ### Hydration
 
-Same client entry as SSR. The static HTML embeds loader data via `window.__STAX_DATA__`, which the client picks up via `Platform.makeClientLayer`:
+Same client entry as SSR. The static HTML embeds loader data in a `<script type="application/json" id="__stax_data">` block, which the client picks up via `Platform.makeClientLayer`:
 
 ```ts
 // client.ts
@@ -348,7 +348,7 @@ Produces:
   </head>
   <body>
     <div id="root"><div>Hello</div></div>
-    <script>window.__STAX_DATA__={...}</script>
+    <script type="application/json" id="__stax_data">{...}</script>
     <script type="module" src="/client.js"></script>
   </body>
 </html>
@@ -360,7 +360,7 @@ Safely serializes JSON for embedding in HTML `<script>` tags. Escapes `<`, `>`, 
 
 ### `generateLoaderDataScript(loaderData)`
 
-Generates a `<script>` tag that sets `window.__STAX_DATA__`. Returns empty string if no data.
+Generates a `<script type="application/json" id="__stax_data">` data block holding the loader data as JSON. Returns empty string if no data. The block is CSP-friendly out of the box — browsers don't execute non-JS script types, so `script-src 'self'` governs no nonce/hash obligations on it.
 
 ## Client API
 
@@ -368,7 +368,7 @@ Generates a `<script>` tag that sets `window.__STAX_DATA__`. Returns empty strin
 
 Creates an Effect Layer providing `NavigationContext` and `RouteDataProvider` for the client.
 
-- **First render (hydration):** Reads data from `window.__STAX_DATA__` embedded by the server
+- **First render (hydration):** Reads data from the embedded `<script type="application/json" id="__stax_data">` block
 - **Subsequent navigations:** Fetches data from the server via `?_data=1`
 
 ```ts
@@ -390,7 +390,7 @@ GET /users/123
   -> Run loader: getUser("123")
   -> Build RouteDataService: { data, loaderPath, actions }
   -> SSR render component tree
-  -> Embed data in window.__STAX_DATA__
+  -> Embed data in <script type="application/json" id="__stax_data">
   -> Return full HTML document
 ```
 
@@ -399,7 +399,7 @@ GET /users/123
 ```
 Browser loads HTML
   -> hydrate() attaches to existing DOM
-  -> makeClientLayer reads window.__STAX_DATA__
+  -> makeClientLayer reads the embedded __stax_data JSON block
   -> Component tree hydrates with server data
 ```
 

@@ -168,6 +168,6 @@ hydrate(App(), document.getElementById("root")!, {
 });
 ```
 
-`Platform.makeClientLayer` provides both `NavigationContext` and `RouteDataProvider` — the latter reads the SSG-embedded `window.__STAX_DATA__` on first load, then fetches `<path>?_data=1` for subsequent navigations (the Vite plugin strips loaders from the client bundle, so this fetch is how loader data reaches the client after hydration).
+`Platform.makeClientLayer` provides both `NavigationContext` and `RouteDataProvider` — the latter reads the SSG-embedded `<script type="application/json" id="__stax_data">` block on first load, then fetches `<path>?_data=1` for subsequent navigations (the Vite plugin strips loaders from the client bundle, so this fetch is how loader data reaches the client after hydration).
 
 After hydration, clicking a Link triggers client-side navigation — the browser doesn't reload the page.

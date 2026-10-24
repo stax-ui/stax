@@ -18,28 +18,15 @@ import {
 /**
  * The real `extractEmbeddedRouteData` helper lives inline in
  * `Platform.ts`. Duplicating it here keeps the test coupled to the
- * emitted script shape rather than to the private helper's identity
- * — both the current `type="application/json"` block and the legacy
- * `<script>window.__STAX_DATA__=…</script>` form must round-trip
- * cleanly during the migration window.
+ * emitted script shape rather than to the private helper's identity.
  */
 const extractEmbeddedRouteData = (html: string): unknown => {
-  const jsonMatch = html.match(
+  const match = html.match(
     /<script\b[^>]*\bid=["']__stax_data["'][^>]*>\s*([\s\S]+?)\s*<\/script>/,
   );
-  if (jsonMatch) {
-    try {
-      return JSON.parse(jsonMatch[1]);
-    } catch {
-      // fall through
-    }
-  }
-  const legacyMatch = html.match(
-    /<script[^>]*>\s*window\.__STAX_DATA__\s*=\s*(.+?)\s*<\/script>/s,
-  );
-  if (!legacyMatch) return undefined;
+  if (!match) return undefined;
   try {
-    return JSON.parse(legacyMatch[1]);
+    return JSON.parse(match[1]);
   } catch {
     return undefined;
   }
@@ -100,29 +87,6 @@ describe("static-host data fallback (makeClientLayer)", () => {
     const html =
       '<script type="application/json" id="__stax_data">not-json</script>';
     expect(extractEmbeddedRouteData(html)).toBeUndefined();
-  });
-
-  it("still extracts legacy `window.__STAX_DATA__` output", () => {
-    // Migration-window compat: a client deployed BEFORE its HTML
-    // was regenerated must still hydrate. One minor cycle, then
-    // we drop the legacy regex.
-    const payload = { data: { name: "Jon" }, actions: {} };
-    const legacyHtml =
-      "<html><body><script>window.__STAX_DATA__=" +
-      serializeForHtml(payload) +
-      "</script></body></html>";
-    expect(extractEmbeddedRouteData(legacyHtml)).toEqual(payload);
-  });
-
-  it("prefers the new data block when both shapes are present", () => {
-    // Defensive: we tolerate both during the migration, but the new
-    // block is authoritative when the page carries both.
-    const authoritative = { data: { from: "json-block" }, actions: {} };
-    const legacy = { data: { from: "legacy-global" }, actions: {} };
-    const mixed =
-      `<script type="application/json" id="__stax_data">${serializeForHtml(authoritative)}</script>` +
-      `<script>window.__STAX_DATA__=${serializeForHtml(legacy)}</script>`;
-    expect(extractEmbeddedRouteData(mixed)).toEqual(authoritative);
   });
 
   it("handles the exact serializeForHtml output format", () => {

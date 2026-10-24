@@ -289,7 +289,7 @@ export const document = {
 
 ### Client hydration
 
-Like SSR, the client hydrates after the static HTML loads. SSG still needs `Platform.makeClientLayer` — it provides `NavigationContext` (for `Outlet`/`Link`) and reads the SSG-embedded `window.__STAX_DATA__` on first load. On subsequent client-side navigations it fetches the matching HTML shell and pulls the embedded data out (the Vite plugin strips loaders from the client bundle, so this is how loader data reaches routes after hydration):
+Like SSR, the client hydrates after the static HTML loads. SSG still needs `Platform.makeClientLayer` — it provides `NavigationContext` (for `Outlet`/`Link`) and reads the SSG-embedded `<script type="application/json" id="__stax_data">` block on first load. On subsequent client-side navigations it fetches the matching HTML shell and pulls the embedded data out (the Vite plugin strips loaders from the client bundle, so this is how loader data reaches routes after hydration):
 
 ```typescript
 import { hydrate } from "@stax-ui/dom/hydrate";
