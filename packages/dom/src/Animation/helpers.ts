@@ -1,5 +1,7 @@
 import { Effect } from "effect";
 
+import { logWarn } from "@stax-ui/core";
+
 import * as Element from "../Element/index.js";
 import type { AnimationEndResult, AnimationHook } from "./types.js";
 
@@ -20,6 +22,22 @@ export const parseClasses = (classes: string): string[] =>
     .split(/\s+/)
     .map((c) => c.trim())
     .filter((c) => c.length > 0);
+
+/**
+ * Collapse a list of space-separated class groups (any of which may be
+ * `undefined`) into a flat array of individual classes. Removes the
+ * group→class→class nested-iteration pattern at every call site.
+ */
+export const flattenGroups = (
+  groups: readonly (string | undefined)[],
+): string[] => {
+  const out: string[] = [];
+  for (const g of groups) {
+    if (!g) continue;
+    for (const c of parseClasses(g)) out.push(c);
+  }
+  return out;
+};
 
 /**
  * Parse a CSS time-list value (e.g. "0.15s, 0s, 300ms") to the maximum
@@ -102,8 +120,59 @@ const hasActiveAnimations = (element: HTMLElement): boolean => {
 };
 
 /**
+ * Minimal shape of the `Animation` interface we rely on so this file
+ * stays usable in environments (older DOM lib targets, jsdom) that
+ * don't declare the full API. Field names mirror the Web Animations
+ * spec (`Animation.effect`, `Animation.finished`); they are the DOM
+ * API we are consuming, not names we chose.
+ */
+interface AnimationLike {
+  readonly effect?: { readonly target?: Node | null } | null;
+  readonly finished: Promise<unknown>;
+  readonly constructor?: { readonly name?: string };
+}
+
+/**
+ * Narrow shape of the element's `getAnimations` method used by the fast
+ * path. The DOM lib's `Element.getAnimations` returns `Animation[]`
+ * (whose `effect` is `AnimationEffect` without `.target`); we work
+ * against our own `AnimationLike` so the filter can read what it needs
+ * without widening the Web Animations surface. `getAnimationsOf` reads
+ * the method off an element through this narrower view in one place so
+ * the call site stays free of inline casts.
+ */
+interface ElementWithGetAnimations {
+  readonly getAnimations: (options?: { subtree?: boolean }) => AnimationLike[];
+}
+
+const getAnimationsOf = (
+  element: HTMLElement,
+): ElementWithGetAnimations["getAnimations"] | undefined => {
+  const narrowed = element as unknown as Partial<ElementWithGetAnimations>;
+  return typeof narrowed.getAnimations === "function"
+    ? narrowed.getAnimations.bind(narrowed)
+    : undefined;
+};
+
+/**
  * Wait for animation or transition to complete on an element.
- * Returns immediately if no animation/transition is detected.
+ *
+ * Prefers `element.getAnimations()` when available (every modern
+ * browser): it filters to animations/transitions whose effect target
+ * is `element` itself (so a descendant's hover transition can't
+ * resolve the parent's exit early), and waits on
+ * `Promise.allSettled(a.finished)` so the longest-running property
+ * decides when the lifecycle ends. If `getAnimations` returns an
+ * empty list the wait resolves immediately with `"skip"` — closes
+ * the "declared transition that doesn't actually change anything"
+ * gap where the event-based path waited out the full timeout.
+ *
+ * Falls back to the historical event-plus-timeout path for jsdom and
+ * other environments without `getAnimations`. That path keeps the
+ * same early-skip based on computed style and the same timeout
+ * warning. It gains an `event.target === element` guard on the end
+ * listeners so a bubbled `transitionend` from a descendant doesn't
+ * resolve the wait early.
  */
 export const waitForAnimationEvent = (
   element: HTMLElement,
@@ -117,12 +186,6 @@ export const waitForAnimationEvent = (
     let resolved = false;
 
     const rafId = requestAnimationFrame(() => {
-      if (!hasActiveAnimations(element)) {
-        resolved = true;
-        resume(Effect.succeed({ endedBy: "skip" }));
-        return;
-      }
-
       const resolve = (result: AnimationEndResult) => {
         if (resolved) return;
         resolved = true;
@@ -130,28 +193,84 @@ export const waitForAnimationEvent = (
         resume(Effect.succeed(result));
       };
 
-      const handleAnimationEnd = () => resolve({ endedBy: "animation" });
-      const handleTransitionEnd = () => resolve({ endedBy: "transition" });
-      const handleTimeout = () => {
-        if (process.env.NODE_ENV !== "production") {
-          console.warn(
-            "[stax] Animation timeout reached. The transitionend/animationend event " +
-              "did not fire. This usually means your CSS classes are missing the " +
-              "transition property. With Tailwind, ensure you have BOTH transition-* " +
-              "(e.g., transition-opacity) AND duration-* (e.g., duration-150). " +
-              "You may also need the ! prefix for specificity (e.g., !opacity-100).",
-            element,
-          );
+      // Fast path — `getAnimations` is the authoritative view of
+      // what's actually running on this element.
+      const getAnimations = getAnimationsOf(element);
+      if (getAnimations) {
+        // Default `subtree: false` scopes to this element, but older
+        // Firefox builds return descendant animations anyway — filter
+        // defensively by effect.target.
+        const all = getAnimations();
+        const own = all.filter((a) => {
+          const target = a.effect?.target;
+          return target === undefined || target === null || target === element;
+        });
+
+        if (own.length === 0) {
+          resolve({ endedBy: "skip" });
+          return;
         }
+
+        let settled = false;
+        const timeoutId = setTimeout(() => {
+          void Effect.runPromise(
+            logWarn(
+              "animation timeout: running animations did not settle before the configured timeout",
+              "stax.animation",
+              { timeout },
+            ),
+          );
+          resolve({ endedBy: "timeout" });
+        }, timeout);
+
+        cleanup = () => {
+          settled = true;
+          clearTimeout(timeoutId);
+        };
+
+        void Promise.allSettled(own.map((a) => a.finished)).then(() => {
+          if (settled) return;
+          // Classify as "transition" when the longest matcher was a
+          // CSSTransition; otherwise "animation". The DOM exposes the
+          // runtime class on the native `constructor.name`.
+          const kind = own.some((a) => a.constructor?.name === "CSSTransition")
+            ? ("transition" as const)
+            : ("animation" as const);
+          resolve({ endedBy: kind });
+        });
+        return;
+      }
+
+      // Fallback — no `getAnimations` (jsdom). Keep the computed-style
+      // early-skip and the event-plus-timeout path, with a self-target
+      // guard on the listeners so a bubbled descendant event can't
+      // resolve the parent's wait.
+      if (!hasActiveAnimations(element)) {
+        resolve({ endedBy: "skip" });
+        return;
+      }
+
+      const handleAnimationEnd = (e: Event) => {
+        if (e.target !== element) return;
+        resolve({ endedBy: "animation" });
+      };
+      const handleTransitionEnd = (e: Event) => {
+        if (e.target !== element) return;
+        resolve({ endedBy: "transition" });
+      };
+      const handleTimeout = () => {
+        void Effect.runPromise(
+          logWarn(
+            "animation timeout: transitionend/animationend did not fire — usually a missing transition-* / duration-* pair (Tailwind), or missing ! prefix for specificity",
+            "stax.animation",
+            { timeout },
+          ),
+        );
         resolve({ endedBy: "timeout" });
       };
 
-      element.addEventListener("animationend", handleAnimationEnd, {
-        once: true,
-      });
-      element.addEventListener("transitionend", handleTransitionEnd, {
-        once: true,
-      });
+      element.addEventListener("animationend", handleAnimationEnd);
+      element.addEventListener("transitionend", handleTransitionEnd);
       const timeoutId = setTimeout(handleTimeout, timeout);
 
       cleanup = () => {
