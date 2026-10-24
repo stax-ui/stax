@@ -1,6 +1,6 @@
 {
   "name": "stax-template-spa",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,8 +9,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@stax-ui/dom": "^0.10.0",
-    "@stax-ui/router": "^0.5.3",
+    "@stax-ui/dom": "^0.11.0",
+    "@stax-ui/router": "^0.6.0",
     "effect": "^3.19.13"
   },
   "devDependencies": {
