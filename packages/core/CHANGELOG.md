@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.8.0
+
+### Minor Changes
+
+- 0ed74c9: feat(core,dom): reactive `Boundary.error` catches subscription-path failures
+
+  Closes the loop on typed errors from Outlet (and any other long-running `reconcile` subscription — `each`, `when`, `match`, `redraw`, `animated`): a `Boundary.error` wrapping the subtree now catches failures that fire on subscription-driven syncs, not just the initial render.
+
+  ### How it works
+  - **`ErrorBoundaryCtx`** (new) in `@stax-ui/core`. Context tag whose service exposes `report(cause)` + `clear`.
+  - **`reconcile`'s `safeSync`** reads the ambient `ErrorBoundaryCtx` via `Effect.serviceOption`. On failure it calls `report`. On success it calls `clear`. If no boundary is installed, both calls short-circuit and the historical "log + swallow" behavior stays — no change for existing callers.
+  - **`Boundary.error` in `@stax-ui/dom`** now:
+    - Owns a `Signal<Option<Cause>>` reflecting the latest sync outcome.
+    - Provides `ErrorBoundaryCtx` into its subtree.
+    - Uses `matchOption` to swap between child and fallback based on the signal.
+    - Pre-runs the initial render once so the signal is set synchronously before `matchOption`'s first evaluation; the mounted node is one-shot cached so a successful initial render isn't re-run.
+
+  ### Semantics
+  - **Initial render fails** → fallback mounts (same as today).
+  - **Subscription-path failure in the subtree** → report fires → signal flips to `Some` → `matchOption` swaps to fallback.
+  - **Subsequent successful sync** → `clear` fires → signal flips to `None` → `matchOption` swaps back to the child (fresh mount, not the stale pre-render cache).
+  - **No boundary installed** → same behavior as today (log + swallow).
+
+  ### New option
+
+  `Boundary.error(tryRender, catchRender, { catchDefects: boolean })`
+
+  - Default `false` — only typed `Effect.fail(...)` failures route to the fallback.
+  - `true` — defects (`Effect.die`, uncaught sync throws) also route to the fallback. For top-level app boundaries that want to catch runtime bugs too.
+
+  ### Backward compatibility
+
+  Signature grew by one optional argument. Return type `R` now includes `ControlCtx` because the reactive swap uses `matchOption` internally. In practice every call site already has `ControlCtx` available (any component mounted via `mount` / `hydrate`), so this is a type-only change for most callers. The old non-reactive `Boundary.error` is unchanged in `@stax-ui/core` — the reactive upgrade is DOM-side only.
+
+- ab711af: feat(core): `Signal.controllable` for the controlled/uncontrolled component pattern
+
+  Adds `Signal.controllable(options)`, returning a `Signal<A>` that behaves two different ways depending on whether a `value` prop was passed:
+
+  - **Uncontrolled** (`value` omitted) — the returned Signal owns its own state, initialised to `defaultValue`. `.set` / `.update` commit and fire `onChange`.
+  - **Controlled** (`value` defined) — the returned Signal's reads delegate to the consumer's Readable, so it always reflects whatever the consumer currently holds. `.set` / `.update` fire `onChange` with the requested value and otherwise do nothing — the value only changes when the consumer updates their own state in response.
+
+  From the component's perspective it's a Signal either way: read via `.get` / `.changes`, write via `.set` / `.update`. Which writes stick is the consumer's call.
+
+  Mode is fixed at construction — stax props are evaluated once, so a prop can't flip from defined to undefined later. A plain value in controlled mode is legitimate (component is pinned read-only). Writes are serialized under a one-permit semaphore so `update((n) => n + 1)` called twice in uncontrolled mode goes 0 → 1 → 2.
+
+  Outside changes to the consumer's Readable do NOT fire `onChange` — that would invite feedback loops.
+
+  ### Deprecations
+
+  `Signal.fromNullable` and `Signal.fromReactive` are deprecated in favour of `Signal.controllable`:
+
+  - `fromNullable` handed the consumer's Signal through unmodified, so the component wrote to it directly with no hook for validation or notification.
+  - `fromReactive`'s Readable path read the Readable once and never followed later changes — components using it with a Readable prop looked controlled but silently stopped tracking the consumer after the first render.
+
+  ### Bug fix
+
+  `Signal.fromReactive`'s Readable path now subscribes to the Readable and writes each emission into the returned Signal, so a controlled-via-Readable component actually tracks the consumer. The broader design limitation (writes don't flow back to the consumer, there's no `onChange` hook) remains — switch to `Signal.controllable` for the full fix.
+
 ## 0.7.0
 
 ### Minor Changes

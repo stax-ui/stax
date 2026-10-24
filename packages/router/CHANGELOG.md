@@ -1,5 +1,70 @@
 # Changelog
 
+## 0.6.0
+
+### Minor Changes
+
+- 7778414: feat(router): typed `MetaRenderError` on Outlet's E channel
+
+  A route's `meta` function runs user-written code that typically reads fields off the loader's `data`. When data shape doesn't match (e.g. SSG client-side nav briefly loading the wrong page's blob, loader stripped by the Vite transform leaving `data` undefined, or a drift between the loader's output and what the meta function expects), the dereference throws — currently as an unanchored `TypeError` logged under `stax.reconcile` and swallowed.
+
+  This change surfaces that failure as a tagged `MetaRenderError` and adds it to the Route's E channel when `Route.meta(...)` is applied, so the risk shows up in the type at the call site. Users can:
+
+  ```ts
+  hydrate(DocLayout().pipe(
+    Effect.catchTag("MetaRenderError", (e) =>
+      Effect.sync(() => {
+        // log to Sentry, render a fallback, etc.
+        return someFallbackElement;
+      }),
+    ),
+  ), ...);
+  ```
+
+  ### What propagates where
+  - **Initial render** — Outlet's first sync propagates to the caller. `Effect.catchTag("MetaRenderError", ...)` works here.
+  - **Subsequent navigation syncs** — run on a forked subscription fiber via `Effect.forkScoped`; failures stay in the fiber. These still get logged under `stax.reconcile`, now with the error's `_tag` carried through, but the catchTag path doesn't apply. The subscription survives either way, matching today's behavior.
+
+  ### What's not in this PR
+  - `LoaderError` and `RouteRenderError` as sibling typed errors — their design intersects with reconcile's subscription-survival guarantee in ways that need a bigger architectural look (see the thread on #190). Follow-up PRs if we decide to go further.
+  - Propagating subscription-path typed errors to `catchTag` requires reshaping how `ctx.subscribe` surfaces its forked fiber's failures. Also a separate PR.
+
+### Patch Changes
+
+- e40a93e: feat(platform): hydration data is now a non-executable JSON block
+
+  Replaces the previous inline executable script with a `type="application/json"` data block:
+
+  ```html
+  <!-- before -->
+  <script>
+    window.__STAX_DATA__={...}
+  </script>
+
+  <!-- after -->
+  <script type="application/json" id="__stax_data">
+    {...}
+  </script>
+  ```
+
+  ### Why
+  - **CSP compatibility by default.** `script-src` only governs scripts the browser _executes_. A `type="application/json"` block is never executed, so it needs no nonce and no inline-script hash. SSG output now runs under a plain `script-src 'self'` with zero configuration — which is important because static pages can't carry nonces.
+  - **This was stax's only inline executable script.** Removing it means strict CSP is reachable without any further framework-level opt-in. Build 2 of the CSP proposal (per-request nonce support) remains to make SSR work under `script-src 'nonce-…' 'strict-dynamic'`; this change makes the simpler case work now.
+  - **Side benefit: no global on `window`.** Hydration data isn't readable by third-party scripts through a well-known handle, and can't collide with other `__STAX_*` globals.
+
+  ### Breaking change
+
+  Clean cut. The legacy `window.__STAX_DATA__` global is no longer emitted and no longer read — neither at hydration time nor via the SSG client-nav HTML-extraction fallback. A client bundle from this version will not hydrate pages served from an older platform build, and vice versa.
+
+  If you're deploying this upgrade in-place, redeploy the server (SSR) or regenerate the HTML (SSG) at the same time as the client bundle; there's no overlap window to worry about.
+
+- Updated dependencies [0ed74c9]
+- Updated dependencies [c9ef356]
+- Updated dependencies [14b1cdd]
+- Updated dependencies [ab711af]
+  - @stax-ui/core@0.8.0
+  - @stax-ui/dom@0.11.0
+
 ## 0.5.3
 
 ### Patch Changes

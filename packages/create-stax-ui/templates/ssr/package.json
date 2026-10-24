@@ -1,6 +1,6 @@
 {
   "name": "stax-template-ssr",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,15 +9,15 @@
     "serve": "node dist/server/index.js"
   },
   "dependencies": {
-    "@stax-ui/dom": "^0.10.0",
-    "@stax-ui/platform": "^0.6.0",
-    "@stax-ui/router": "^0.5.3",
+    "@stax-ui/dom": "^0.11.0",
+    "@stax-ui/platform": "^0.7.0",
+    "@stax-ui/router": "^0.6.0",
     "@effect/platform": "^0.94.0",
     "@effect/platform-node": "^0.104.0",
     "effect": "^3.19.13"
   },
   "devDependencies": {
-    "@stax-ui/vite-plugin": "^0.6.0",
+    "@stax-ui/vite-plugin": "^0.7.0",
     "typescript": "~5.9.3",
     "vite": "^7.0.0"
   }
