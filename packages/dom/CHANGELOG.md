@@ -1,5 +1,137 @@
 # Changelog
 
+## 0.11.0
+
+### Minor Changes
+
+- 0ed74c9: feat(core,dom): reactive `Boundary.error` catches subscription-path failures
+
+  Closes the loop on typed errors from Outlet (and any other long-running `reconcile` subscription — `each`, `when`, `match`, `redraw`, `animated`): a `Boundary.error` wrapping the subtree now catches failures that fire on subscription-driven syncs, not just the initial render.
+
+  ### How it works
+  - **`ErrorBoundaryCtx`** (new) in `@stax-ui/core`. Context tag whose service exposes `report(cause)` + `clear`.
+  - **`reconcile`'s `safeSync`** reads the ambient `ErrorBoundaryCtx` via `Effect.serviceOption`. On failure it calls `report`. On success it calls `clear`. If no boundary is installed, both calls short-circuit and the historical "log + swallow" behavior stays — no change for existing callers.
+  - **`Boundary.error` in `@stax-ui/dom`** now:
+    - Owns a `Signal<Option<Cause>>` reflecting the latest sync outcome.
+    - Provides `ErrorBoundaryCtx` into its subtree.
+    - Uses `matchOption` to swap between child and fallback based on the signal.
+    - Pre-runs the initial render once so the signal is set synchronously before `matchOption`'s first evaluation; the mounted node is one-shot cached so a successful initial render isn't re-run.
+
+  ### Semantics
+  - **Initial render fails** → fallback mounts (same as today).
+  - **Subscription-path failure in the subtree** → report fires → signal flips to `Some` → `matchOption` swaps to fallback.
+  - **Subsequent successful sync** → `clear` fires → signal flips to `None` → `matchOption` swaps back to the child (fresh mount, not the stale pre-render cache).
+  - **No boundary installed** → same behavior as today (log + swallow).
+
+  ### New option
+
+  `Boundary.error(tryRender, catchRender, { catchDefects: boolean })`
+
+  - Default `false` — only typed `Effect.fail(...)` failures route to the fallback.
+  - `true` — defects (`Effect.die`, uncaught sync throws) also route to the fallback. For top-level app boundaries that want to catch runtime bugs too.
+
+  ### Backward compatibility
+
+  Signature grew by one optional argument. Return type `R` now includes `ControlCtx` because the reactive swap uses `matchOption` internally. In practice every call site already has `ControlCtx` available (any component mounted via `mount` / `hydrate`), so this is a type-only change for most callers. The old non-reactive `Boundary.error` is unchanged in `@stax-ui/core` — the reactive upgrade is DOM-side only.
+
+- c9ef356: feat(dom,platform): per-request Content Security Policy nonce support
+
+  Lets a stax app serve strict `script-src 'nonce-…'` / `style-src 'nonce-…'` policies end-to-end, without the app having to pass the per-request nonce around by hand.
+
+  ### What ships
+
+  **`CspNonce` service in `@stax-ui/dom`.** New context tag + service type. Not required by anyone — every consumer reads it via `Effect.serviceOption(CspNonce)` so the nonce stays off `R`.
+
+  **`enableCspNonce` pipeable modifier.** Applied at the factory definition site in `DOMElements.ts` — `$.script` and `$.style` are built via `enableCspNonce(makeElementFactory("script"))`, so the divergence from the stock behavior lives at the three CSP-sensitive factories, not inside `makeElementFactory`. Reads the ambient nonce and stamps it onto the attribute set unless the caller provided an explicit `nonce`.
+
+  **`csp` option on `Platform.toHttpRoutes`.** Opts in per-route-group:
+
+  ```ts
+  Platform.toHttpRoutes(router, {
+    app,
+    document: { title: "My App", scripts: ["/assets/client.js"] },
+    csp: {
+      nonce: true, // or (request) => string
+      policy: (nonce) =>
+        `script-src 'nonce-${nonce}' 'strict-dynamic'; ` +
+        `style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'`,
+      reportOnly: false, // sends CSP-Report-Only when true
+    },
+  });
+  ```
+
+  - `nonce: true` generates 16 random bytes (base64) per request via `crypto.getRandomValues`.
+  - `nonce: fn` sources from upstream middleware.
+  - `policy` writes the response header. Omit to set it yourself (reverse proxy / middleware).
+  - `reportOnly` switches to `Content-Security-Policy-Report-Only` for rollout.
+
+  **Automatic client pickup.** `hydrate` and `mount` read `<meta property="csp-nonce" nonce="…">` from the document and provide `CspNonce` into the client-side render scope. Zero code change in the app — all `$.script` / `$.style` elements the client creates post-mount get the stamp automatically.
+
+  **`generateDocument` emits the stamp.** When a nonce is passed:
+  - `<meta property="csp-nonce" nonce="…">` lands in `<head>` so the client can pick it up.
+  - `nonce="…"` is added to every `<script type="module">` and `<link rel="stylesheet">` the document shell emits.
+
+  ### Design decisions worth calling out
+  - **No change to `makeElementFactory`.** The CSP divergence lives at the factory definition site via `enableCspNonce`, keeping the stock factory uniform for all tags. `$.div`, `$.span`, etc. stay zero-overhead.
+  - **`CspNonce` is never on anyone's `R`.** Readers use `Effect.serviceOption`, which returns `None` when no boundary provided it. Apps that don't use CSP pay nothing — no required service, no error, no behavioral change.
+  - **Explicit nonce wins.** Rare but legitimate (embedding a third-party script with its own policy-matching nonce).
+
+  ### Not in this release
+  - `document.head` as a function (so raw head HTML can carry the nonce) — follow-up.
+  - Dev-server integration (`html.cspNonce` placeholder swap in the Vite plugin) — follow-up, Vite-version brittle.
+  - Node adapter CSP option — `toHttpRoutes` covers the request pipeline; adapter-level config would be redundant.
+  - Build-time SHA256 hash support for user-embedded inline scripts in SSG output — defer indefinitely. Part 1 (`feat/platform-json-data-block`) removed stax's only inline executable script, so SSG runs under `script-src 'self'` without any hashes.
+
+- 14b1cdd: feat(dom): `Element.bindVisible` + animation-runtime fixes
+
+  ### `Element.bindVisible`
+
+  New reactive show/hide binding for an element that stays mounted while hidden. Toggles the `hidden` attribute on a `Readable<boolean>` and runs enter/exit animations against the same `AnimationOptions` shape that `when` / `each` / `match` accept.
+
+  ```ts
+  const open = yield * Signal.make(false);
+
+  yield *
+    $.div({ class: "panel" }, ...content).pipe(
+      Element.bindVisible(open, {
+        animate: {
+          enterFrom: "opacity-0 transition-opacity duration-150",
+          enter: "!opacity-100",
+          exit: "transition-opacity duration-150",
+          exitTo: "!opacity-0",
+        },
+      }),
+    );
+  ```
+
+  Fills the gap `when` / `each` / `match` leave open — they animate mounting and unmounting, which loses DOM state (scroll position, form values, focus returns) and prevents SEO indexing or find-in-page reveal of hidden content.
+
+  - **Writes `display: none !important` by default** alongside the `hidden` attribute so Tailwind's display utilities don't override `[hidden] { display: none }`. Opt out with `manageDisplay: false`.
+  - **`hidden="until-found"` support** via `hiddenValue: "until-found"`. When the browser's find-in-page reveals the element and fires `beforematch`, the consumer flips `visible` to `true`; `bindVisible` detects the already-removed `hidden` attribute and skips the enter animation.
+  - **SSR renders the attribute and style** so the markup is correct before hydration. Hydration adopts whatever's already there.
+  - **Interrupt handling.** Each change interrupts the previous animation fiber, so rapid toggles don't pile up. Combined with the `runAnimation` interrupt cleanup (below), mid-flight reverses leave the element clean.
+  - **`intro: true`** runs the enter animation on first mount when the initial value is `true` — same contract as `intro` on control-flow functions.
+
+  ### `runAnimation` cleans up its own classes on interrupt
+
+  Fixes a latent class-leak: when an in-flight animation is interrupted (e.g. a rapid condition flip reverses a mid-exit animation), the next run inherits half-applied `enterFrom` / `enter` / `enterTo` / `exit` / `exitTo` classes and fights them. The lifecycle now tracks every class it adds or removes in a per-run `touched` set and strips them in an `Effect.ensuring` finalizer when the body didn't complete normally. Normal completions still leave `enterTo` on the element — the finalizer only fires on interrupt.
+
+  ### `waitForAnimationEvent` uses `getAnimations()` where available
+
+  Three gaps in the historical event-plus-timeout path:
+
+  1. A descendant's `transitionend` bubbled and resolved the parent's wait early (hover color on a nested button under a `when`-animated parent).
+  2. The shortest property's `transitionend` won — `transition: opacity 150ms, transform 300ms` resolved after 150ms, leaving transform unfinished.
+  3. A declared-but-unchanging transition (hover rule the exit classes don't touch) emitted no event and waited out the full 5s timeout.
+
+  The wait now prefers `element.getAnimations()` when it's available: filters to animations whose effect target is the element itself, waits on `Promise.allSettled(a.finished)` so the longest-running wins, and resolves immediately to `"skip"` when no animations are running (no declared-but-unchanging stall). The event-plus-timeout path stays as a fallback for jsdom, with a `event.target === element` guard added so a bubbled descendant can't resolve the parent's wait there either.
+
+### Patch Changes
+
+- Updated dependencies [0ed74c9]
+- Updated dependencies [ab711af]
+  - @stax-ui/core@0.8.0
+
 ## 0.10.0
 
 ### Minor Changes

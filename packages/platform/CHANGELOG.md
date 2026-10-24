@@ -1,5 +1,131 @@
 # Changelog
 
+## 0.7.0
+
+### Minor Changes
+
+- c9ef356: feat(dom,platform): per-request Content Security Policy nonce support
+
+  Lets a stax app serve strict `script-src 'nonce-…'` / `style-src 'nonce-…'` policies end-to-end, without the app having to pass the per-request nonce around by hand.
+
+  ### What ships
+
+  **`CspNonce` service in `@stax-ui/dom`.** New context tag + service type. Not required by anyone — every consumer reads it via `Effect.serviceOption(CspNonce)` so the nonce stays off `R`.
+
+  **`enableCspNonce` pipeable modifier.** Applied at the factory definition site in `DOMElements.ts` — `$.script` and `$.style` are built via `enableCspNonce(makeElementFactory("script"))`, so the divergence from the stock behavior lives at the three CSP-sensitive factories, not inside `makeElementFactory`. Reads the ambient nonce and stamps it onto the attribute set unless the caller provided an explicit `nonce`.
+
+  **`csp` option on `Platform.toHttpRoutes`.** Opts in per-route-group:
+
+  ```ts
+  Platform.toHttpRoutes(router, {
+    app,
+    document: { title: "My App", scripts: ["/assets/client.js"] },
+    csp: {
+      nonce: true, // or (request) => string
+      policy: (nonce) =>
+        `script-src 'nonce-${nonce}' 'strict-dynamic'; ` +
+        `style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'`,
+      reportOnly: false, // sends CSP-Report-Only when true
+    },
+  });
+  ```
+
+  - `nonce: true` generates 16 random bytes (base64) per request via `crypto.getRandomValues`.
+  - `nonce: fn` sources from upstream middleware.
+  - `policy` writes the response header. Omit to set it yourself (reverse proxy / middleware).
+  - `reportOnly` switches to `Content-Security-Policy-Report-Only` for rollout.
+
+  **Automatic client pickup.** `hydrate` and `mount` read `<meta property="csp-nonce" nonce="…">` from the document and provide `CspNonce` into the client-side render scope. Zero code change in the app — all `$.script` / `$.style` elements the client creates post-mount get the stamp automatically.
+
+  **`generateDocument` emits the stamp.** When a nonce is passed:
+  - `<meta property="csp-nonce" nonce="…">` lands in `<head>` so the client can pick it up.
+  - `nonce="…"` is added to every `<script type="module">` and `<link rel="stylesheet">` the document shell emits.
+
+  ### Design decisions worth calling out
+  - **No change to `makeElementFactory`.** The CSP divergence lives at the factory definition site via `enableCspNonce`, keeping the stock factory uniform for all tags. `$.div`, `$.span`, etc. stay zero-overhead.
+  - **`CspNonce` is never on anyone's `R`.** Readers use `Effect.serviceOption`, which returns `None` when no boundary provided it. Apps that don't use CSP pay nothing — no required service, no error, no behavioral change.
+  - **Explicit nonce wins.** Rare but legitimate (embedding a third-party script with its own policy-matching nonce).
+
+  ### Not in this release
+  - `document.head` as a function (so raw head HTML can carry the nonce) — follow-up.
+  - Dev-server integration (`html.cspNonce` placeholder swap in the Vite plugin) — follow-up, Vite-version brittle.
+  - Node adapter CSP option — `toHttpRoutes` covers the request pipeline; adapter-level config would be redundant.
+  - Build-time SHA256 hash support for user-embedded inline scripts in SSG output — defer indefinitely. Part 1 (`feat/platform-json-data-block`) removed stax's only inline executable script, so SSG runs under `script-src 'self'` without any hashes.
+
+- 7360bcb: feat(platform): colocated `_data.json` per SSG page
+
+  SSG builds now emit a `_data.json` file next to each page's `index.html`, carrying the loader data in the same shape as the embedded `window.__STAX_DATA__` script. `makeClientLayer`'s `RouteDataProvider` tries this file first on client-side navigation.
+
+  **Why.** Before this, client-side navigation on a static host relied on regex-extracting the embedded `__STAX_DATA__` script from the HTML response to `?_data=1`. Static hosts (and `vite preview`'s SPA fallback) often serve the wrong HTML — e.g. the root `index.html` for `/docs/introduction` — which caused the client to silently extract the wrong route's data. The caller then saw structurally-valid-but-wrong data and (if the route's meta or render dereferenced a field) crashed with a mysterious TypeError.
+
+  The new path removes the ambiguity. A direct JSON file either returns the right data or 404s — no silent wrong-data extraction.
+
+  **Fallback order on client navigation:**
+
+  1. **Colocated `${path}/_data.json`** — new SSG default. Fast, cacheable, no HTML parsing.
+  2. **`${path}?_data=1`** — SSR servers' existing JSON handler. Unchanged behavior.
+  3. **HTML extraction** — legacy fallback for older SSG builds (and a loud warning now points at the fix).
+
+  **Emitted by two codepaths:**
+
+  - `Platform.buildStaticSite` (direct API) — the file-write loop writes HTML + sibling JSON.
+  - `ssg-adapter-runtime` (the Vite plugin's SSG build path, which is what `vite build` actually uses) — fires a second `?_data=1` request at the user's handler for each page and writes the JSON response.
+
+  The second-request approach keeps the SSG runtime decoupled from the HTML format and lets the handler's existing data-request branch do the serialization. Loader runs twice per page during build — acceptable for correctness; can optimise later behind a flag.
+
+  **Tests.** Two new buildStaticSite tests verify `_data.json` lands next to `index.html` for every route, and that the fallback 404 page is correctly skipped.
+
+- e40a93e: feat(platform): hydration data is now a non-executable JSON block
+
+  Replaces the previous inline executable script with a `type="application/json"` data block:
+
+  ```html
+  <!-- before -->
+  <script>
+    window.__STAX_DATA__={...}
+  </script>
+
+  <!-- after -->
+  <script type="application/json" id="__stax_data">
+    {...}
+  </script>
+  ```
+
+  ### Why
+  - **CSP compatibility by default.** `script-src` only governs scripts the browser _executes_. A `type="application/json"` block is never executed, so it needs no nonce and no inline-script hash. SSG output now runs under a plain `script-src 'self'` with zero configuration — which is important because static pages can't carry nonces.
+  - **This was stax's only inline executable script.** Removing it means strict CSP is reachable without any further framework-level opt-in. Build 2 of the CSP proposal (per-request nonce support) remains to make SSR work under `script-src 'nonce-…' 'strict-dynamic'`; this change makes the simpler case work now.
+  - **Side benefit: no global on `window`.** Hydration data isn't readable by third-party scripts through a well-known handle, and can't collide with other `__STAX_*` globals.
+
+  ### Breaking change
+
+  Clean cut. The legacy `window.__STAX_DATA__` global is no longer emitted and no longer read — neither at hydration time nor via the SSG client-nav HTML-extraction fallback. A client bundle from this version will not hydrate pages served from an older platform build, and vice versa.
+
+  If you're deploying this upgrade in-place, redeploy the server (SSR) or regenerate the HTML (SSG) at the same time as the client bundle; there's no overlap window to worry about.
+
+- 4b2133a: feat(platform,vite-plugin): `ssgAdapter` opts into MPA preview + pretty-URL middleware
+
+  Makes `vite preview` behave like a real static host for SSG output.
+
+  Vite's default `appType: "spa"` falls back to the root `/index.html` for any URL that isn't a direct file hit. For an SSG app that means `GET /docs/introduction` returns the HOMEPAGE's HTML — which bites every time you build and `pnpm preview`. Switching to `appType: "mpa"` prevents the SPA fallback but introduces a different gap: Vite preview serves files literally and doesn't do the "pretty URL" directory-index resolution that production hosts (Cloudflare Pages, Netlify, nginx, GitHub Pages, S3+CloudFront) do.
+
+  This change closes both gaps:
+
+  1. **New adapter field `previewOptions.appType`.** The `StaxAdapter` contract grows a `previewOptions` shape mirroring `clientBuildOptions`. `ssgAdapter()` sets `appType: "mpa"` by default; the Node adapter leaves it unset (it runs its own HTTP server). The vite-plugin reads this and applies it to Vite's top-level `appType`.
+
+  2. **Pretty-URL preview middleware.** The vite-plugin adds a `configurePreviewServer` hook that, when the adapter opts into `mpa`, rewrites `req.url` from `/path` to `/path/index.html` when the matching directory exists in the build output. One request, prod-shaped behavior. No redirect.
+
+  The two together let `vite preview` serve `GET /docs/introduction` from `dist/docs/introduction/index.html` directly — matching every production static host and lining up with the colocated `_data.json` fetch flow from the previous change in this stack.
+
+### Patch Changes
+
+- Updated dependencies [0ed74c9]
+- Updated dependencies [c9ef356]
+- Updated dependencies [14b1cdd]
+- Updated dependencies [e40a93e]
+- Updated dependencies [7778414]
+  - @stax-ui/dom@0.11.0
+  - @stax-ui/router@0.6.0
+
 ## 0.6.0
 
 ### Minor Changes
