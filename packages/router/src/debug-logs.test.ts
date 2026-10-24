@@ -210,6 +210,53 @@ describe("framework debug logs", () => {
     expect(document.querySelector(".ok")?.textContent).toBe("OK");
   });
 
+  it("Route.meta surfaces MetaRenderError on E for `catchTag` at the initial render", async () => {
+    // Route.meta's input is a user-written function that reads off
+    // `data` — if `data` is wrong-shape (e.g. SSG client-side nav
+    // loading the wrong page's blob), the dereference throws. We
+    // surface this as a typed `MetaRenderError` on the Route's E so
+    // the caller can `.pipe(Effect.catchTag("MetaRenderError", ...))`
+    // on Outlet's initial render and recover with a fallback.
+    //
+    // Subsequent navigation-driven syncs run on a forked subscription
+    // fiber whose failures don't propagate to the caller — those stay
+    // logged via `safeSync` so the subscription survives. The initial
+    // sync IS catchable, which is where this test exercises.
+    const BoomMetaRoute = Route.make("/").pipe(
+      Route.render(() => $.div({ class: "home" }, $.of("Home"))),
+      // Deliberately dereference an undefined field to throw during
+      // meta resolution — mirrors the TypeError the docs-app saw on
+      // /docs/introduction when data shape didn't match.
+      Route.meta(({ data }) => ({
+        title: (data as unknown as { nope: { title: string } }).nope.title,
+      })),
+    );
+    const router = empty.pipe(concat(BoomMetaRoute));
+    const navLayer = Navigation.makeLayer(router, { initialPath: "/" });
+
+    let caughtRoute: string | null = null;
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* Outlet({ router }).pipe(
+          Effect.catchTag("MetaRenderError", (e) =>
+            Effect.sync(() => {
+              caughtRoute = e.route;
+              return document.createElement("div");
+            }),
+          ),
+        );
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(navLayer),
+        Effect.provide(makeCapturingLogger(logs)),
+        Effect.provide(TestLayer),
+      ),
+    );
+
+    expect(caughtRoute).toBe("/");
+  });
+
   it("emits nothing at debug subsystems when the log level is above Debug", async () => {
     // Guards against accidentally logging at higher levels — users who
     // haven't opted in shouldn't see any of this noise.

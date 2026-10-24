@@ -24,6 +24,7 @@ import {
   Data,
   Effect,
   Layer,
+  Option,
   Record,
   Ref,
   Schema,
@@ -275,9 +276,14 @@ export const toHttpRoutes = <
   P extends Record<string, unknown> | never,
   S extends Record<string, unknown> | never,
   D,
+  E,
   R,
 >(
-  router: StaxRouter<P, S, D, never, R>,
+  // `E` is accepted so routes with typed error channels (e.g. `Route.meta(...)` -> `MetaRenderError`)
+  // can be served. The runtime `Effect.catchAllCause` below converts any
+  // render failure into a 500 response, so the signature's job is only
+  // to admit the type into the pipeline.
+  router: StaxRouter<P, S, D, E, R>,
   options?: ToHttpRoutesOptions,
 ): HttpRouter.HttpRouter<
   RedirectError | RouteNotFound,
@@ -716,14 +722,62 @@ export const makeClientLayer = <
 
             // Client navigation: fetch data for the target path.
             //
-            // On an SSR server this hits the `?_data=1` handler and returns
-            // JSON. On a static host (SSG output on any file server) the
-            // query string is ignored and the same page HTML comes back — we
-            // fall back to extracting the embedded `window.__STAX_DATA__`
-            // from the HTML shell. Both modes look the same to callers.
+            // Three stacked strategies, tried in order. Each covers a
+            // different deploy target; whichever lands first wins.
+            //
+            //   1. **SSG colocated JSON** (`${path}/_data.json`).
+            //      `buildStaticSite` emits one of these next to every
+            //      `index.html`. Direct, cacheable, no HTML parsing,
+            //      and no "wrong page served" ambiguity: if the file
+            //      exists it's for this route; if it doesn't, the host
+            //      returns something that fails the content-type /
+            //      JSON check and we move on.
+            //   2. **SSR `?_data=1` handler.** The Node adapter
+            //      intercepts the query and returns JSON directly.
+            //   3. **Static HTML extraction** (legacy fallback). For
+            //      older SSG builds that predate colocated JSON, or
+            //      hosts that insist on serving HTML for every URL.
+            //      The regex-based extraction is fragile — if the
+            //      host serves the wrong page (e.g. an SPA fallback
+            //      to `/index.html`), we'd silently extract the wrong
+            //      route's data. The two paths above exist to avoid
+            //      reaching this one.
             const path = substituteParams(route.path, params);
             const qs = new URLSearchParams(searchParams);
             qs.set("_data", "1");
+            const loaderPath = `${path}?${qs.toString()}`;
+
+            // Strategy 1 — colocated JSON. A plain `.json` file served
+            // without query strings. The vast majority of static hosts
+            // return a JSON content-type for these; if the host does
+            // SPA-fallback the request to HTML, we fall through on the
+            // content-type check and try the next strategy.
+            const jsonUrl = path.endsWith("/")
+              ? `${path}_data.json`
+              : `${path}/_data.json`;
+            const jsonResponse = yield* Effect.tryPromise(() =>
+              fetch(jsonUrl),
+            ).pipe(Effect.option);
+            if (
+              Option.isSome(jsonResponse) &&
+              jsonResponse.value.ok &&
+              isJsonContentType(jsonResponse.value)
+            ) {
+              const json = yield* Effect.tryPromise(() =>
+                jsonResponse.value.json(),
+              );
+              const blob = json as {
+                data: unknown;
+                actions?: Record<string, unknown>;
+              };
+              return {
+                data: blob.data,
+                loaderPath,
+                actions: blob.actions ?? {},
+              } as unknown as RouteDataService;
+            }
+
+            // Strategy 2 — `?_data=1` handler (SSR servers).
             const response = yield* Effect.tryPromise(() =>
               fetch(`${path}?${qs.toString()}`),
             );
@@ -735,10 +789,10 @@ export const makeClientLayer = <
               return json as unknown as RouteDataService;
             }
 
-            // Static fallback: extract from the served HTML shell. The
-            // embedded blob has shape `{ data, actions }` (see buildStaticSite's
-            // hydrationData construction); we pass it through unchanged after
-            // adding a synthetic loaderPath.
+            // Strategy 3 — HTML extraction, the legacy fallback. The
+            // embedded blob has shape `{ data, actions }` (see
+            // buildStaticSite's hydrationData construction); we pass it
+            // through unchanged after adding a synthetic loaderPath.
             const html = yield* Effect.tryPromise(() => response.text());
             const embeddedBlob = extractEmbeddedRouteData(html) as
               { data: unknown; actions?: Record<string, unknown> } | undefined;
@@ -748,10 +802,9 @@ export const makeClientLayer = <
               // — but log it so a broken build/deploy doesn't sit invisible.
               yield* Console.warn(
                 `[@stax-ui/platform] Fetched HTML for ${path} but couldn't find window.__STAX_DATA__. ` +
-                  `Continuing with data: undefined.`,
+                  `Continuing with data: undefined. (Does your SSG build emit \`_data.json\` siblings?)`,
               );
             }
-            const loaderPath = `${path}?${qs.toString()}`;
             return {
               data: embeddedBlob?.data,
               loaderPath,
@@ -814,6 +867,14 @@ export interface BuildStaticSiteOptions {
 interface StaticPage {
   readonly url: string;
   readonly html: string;
+  /**
+   * The loader data blob for this page, in the same shape as the
+   * embedded `window.__STAX_DATA__` script. Written to a sibling
+   * `_data.json` file next to `index.html` so client-side navigation
+   * can fetch route data without parsing HTML. `undefined` for pages
+   * that don't carry loader data (e.g. the fallback 404 page).
+   */
+  readonly data?: Record<string, unknown>;
 }
 
 /**
@@ -959,7 +1020,11 @@ export const buildStaticSite = (
             pageMeta,
           );
 
-          return { url: page.url, html: fullHtml } as StaticPage;
+          return {
+            url: page.url,
+            html: fullHtml,
+            data: hydrationData,
+          } as StaticPage;
         }),
       { concurrency: 10 },
     );
@@ -1011,15 +1076,33 @@ export const buildStaticSite = (
       rendered,
       (page) =>
         Effect.promise(async () => {
-          const filePath =
+          const dir =
             page.url === "/__404__"
-              ? path.join(outDir, "404.html")
+              ? outDir
               : page.url === "/" || page.url === ""
-                ? path.join(outDir, "index.html")
-                : path.join(outDir, page.url, "index.html");
+                ? outDir
+                : path.join(outDir, page.url);
+          const htmlName = page.url === "/__404__" ? "404.html" : "index.html";
+          const htmlPath = path.join(dir, htmlName);
 
-          await fs.mkdir(path.dirname(filePath), { recursive: true });
-          await fs.writeFile(filePath, page.html, "utf-8");
+          await fs.mkdir(dir, { recursive: true });
+          await fs.writeFile(htmlPath, page.html, "utf-8");
+
+          // Sibling JSON for the loader data. The client's
+          // RouteDataProvider tries this first on navigation so it
+          // never has to regex-extract from HTML (which goes wrong
+          // when the hosting layer serves the wrong page — common
+          // under `vite preview`'s SPA fallback). Only emit for
+          // routes that actually have loader data; skip the 404
+          // fallback (its "data" is a static `{}` and there's no
+          // Route.params route pointing at `/404`).
+          if (page.url !== "/__404__" && page.data !== undefined) {
+            await fs.writeFile(
+              path.join(dir, "_data.json"),
+              JSON.stringify(page.data),
+              "utf-8",
+            );
+          }
         }),
       { concurrency: 10 },
     );

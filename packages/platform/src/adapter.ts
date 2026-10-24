@@ -80,6 +80,29 @@ export interface ClientBuildOptions {
 }
 
 /**
+ * Preview-server preferences the adapter contributes. The plugin merges
+ * these into Vite's `preview` config so `vite preview` matches the
+ * runtime shape the adapter is targeting.
+ *
+ * SSG benefits from `appType: "mpa"` so `vite preview` serves
+ * directory URLs via their `index.html` (what every real static host
+ * does) instead of SPA-falling-back to the root `/index.html` for
+ * every unmatched request. The Node adapter leaves this unset — it
+ * runs its own HTTP server, not Vite's preview.
+ */
+export interface PreviewOptions {
+  /**
+   * Vite's `appType` setting applied to the preview server.
+   *   - `"mpa"` — serve each directory URL via its `index.html`. The
+   *     right default for SSG and other multi-page outputs.
+   *   - `"spa"` — fall back to a single `index.html` for every URL. Vite's
+   *     default; the right pick for client-rendered SPAs with no SSR.
+   *   - `"custom"` — leave routing entirely to the adapter.
+   */
+  readonly appType?: "spa" | "mpa" | "custom";
+}
+
+/**
  * Describes a deploy target for a Stax app.
  *
  * The adapter contributes code at build time via `ssrEntryModule`, which
@@ -112,6 +135,14 @@ export interface StaxAdapter {
    * defaults.
    */
   readonly clientBuildOptions?: ClientBuildOptions;
+
+  /**
+   * Vite preview-server preferences. The plugin merges these into
+   * Vite's `preview` config. See `PreviewOptions`. Leave unset when
+   * the adapter runs its own HTTP server (and therefore doesn't rely
+   * on `vite preview`).
+   */
+  readonly previewOptions?: PreviewOptions;
 
   /**
    * Called by the plugin after the SSR build completes. Lets the

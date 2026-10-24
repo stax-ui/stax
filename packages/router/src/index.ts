@@ -28,6 +28,7 @@ export {
   meta as routeMeta,
   resolveMeta,
   NoRenderError,
+  MetaRenderError,
   type RouteParams,
   type RouteSearchParams,
   type RouteData,

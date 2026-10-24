@@ -81,6 +81,20 @@ export const ssgAdapter = (options: SsgAdapterOptions = {}): StaxAdapter => {
       outDir,
       manifest: true,
     },
+    previewOptions: {
+      // SSG's output has one `index.html` per route under a directory
+      // structure that mirrors URL paths. `vite preview` with
+      // `appType: "mpa"` serves directory URLs via their own
+      // `index.html` — matching what every real static host
+      // (Cloudflare Pages, Netlify, nginx, S3+CloudFront) does.
+      //
+      // Vite's default is `appType: "spa"`, which falls back to the
+      // root `/index.html` for any URL that isn't a direct file hit.
+      // That means `GET /docs/introduction` returns the HOMEPAGE's
+      // HTML in `vite preview`, which is nothing like production and
+      // breaks the client's data-fetch flow in subtle ways.
+      appType: "mpa",
+    },
     afterSsrBuild: async (ctx) => {
       // The generated entry's top-level `await runSsgBuild(...)` does
       // the actual work. Dynamic-import it so Node ESM executes it.

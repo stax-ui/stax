@@ -1,5 +1,5 @@
-import { PermissiveChildren } from "@stax-ui/dom";
-import { Link } from "@stax-ui/router";
+import { Element, PermissiveChildren } from "@stax-ui/dom";
+import { Link, NavigationContext } from "@stax-ui/router";
 
 export interface NavLinkProps {
   readonly href: string;
@@ -18,11 +18,15 @@ export interface NavLinkProps {
  * Active state is driven off the `data-active-{exact,prefix}` attribute
  * that `Link` already stamps on the underlying <a> from the current
  * NavigationContext.pathname — no manual context reads needed.
+ *
+ * `E` / `R` default to `never` so plain-child calls (e.g. a string
+ * label) don't widen the inferred Effect requirements to `unknown` and
+ * leak that `unknown` through every parent Sidebar / Layout / mount.
  */
-export const NavLink = <E, R>(
+export const NavLink = <E = never, R = never>(
   props: NavLinkProps,
   ...children: PermissiveChildren<E, R>
-) =>
+): Element.Element<HTMLAnchorElement, E, R | NavigationContext> =>
   Link(
     {
       href: props.href,

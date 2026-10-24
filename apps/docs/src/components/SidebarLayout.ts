@@ -7,8 +7,11 @@ import { Sidebar } from "./Sidebar.js";
  * Docs shell — mirrors HomePage's top-level layout: a Sidebar column
  * on the left (stacked on top on mobile), and a `<main>` flex column
  * on the right that scrolls with the page content.
+ *
+ * `E` / `R` default to `never` so plain-child calls don't widen the
+ * inferred Effect requirements to `unknown` — see the NavLink note.
  */
-export const SidebarLayout = <E, R>(
+export const SidebarLayout = <E = never, R = never>(
   props: { readonly sections: readonly DocSection[] },
   child: Element.Child<E, R>,
 ) =>

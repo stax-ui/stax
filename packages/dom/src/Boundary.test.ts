@@ -1,14 +1,20 @@
 import { Effect, Layer } from "effect";
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { Signal } from "@stax-ui/core";
+
 import { Boundary } from "./Boundary.js";
+import { ClientControlCtx } from "./Control/ClientControlCtx.js";
+import { when } from "./Control/index.js";
 import { $ } from "./Element/index.js";
 import { DOMRendererLive } from "./Render/DOMRenderer.js";
 import { ClientSuspenseBoundaryCtx } from "./SuspenseBoundaryCtx/index.js";
 
-// ClientSuspenseBoundaryCtx depends on DOMRendererLive
+// Boundary.error's reactive swap uses `matchOption` internally, so it
+// requires ControlCtx. ClientSuspenseBoundaryCtx + DOMRendererLive
+// cover the rest; ClientControlCtx completes the stack.
 const TestLayer = Layer.provideMerge(
-  ClientSuspenseBoundaryCtx,
+  Layer.mergeAll(ClientSuspenseBoundaryCtx, ClientControlCtx),
   DOMRendererLive,
 );
 
@@ -61,6 +67,48 @@ describe("Boundary", () => {
       );
 
       expect(el.textContent).toBe("Caught: oops");
+    });
+
+    it("swaps to fallback on subscription-path failure and swaps back on recovery", async () => {
+      // Reactive boundary semantics: a `when` whose onTrue render
+      // throws triggers the fallback the moment the condition flips
+      // to true. Flipping back to false (which successfully renders
+      // onFalse) auto-swaps back to the child since reconcile's
+      // safeSync clears the signal on success.
+      await runTest(
+        Effect.gen(function* () {
+          const broken = yield* Signal.make(false);
+          const el = yield* Boundary.error(
+            () =>
+              $.div(
+                {},
+                when(broken, {
+                  onTrue: () => Effect.die(new Error("subscription boom")),
+                  onFalse: () => $.div({ class: "ok" }, "ok"),
+                }),
+              ),
+            () => $.div({ class: "boom" }, "fallback"),
+            { catchDefects: true },
+          );
+          document.body.appendChild(el);
+
+          yield* Effect.sleep("10 millis");
+          expect(document.querySelector(".ok")?.textContent).toBe("ok");
+
+          // Flip → subscription re-syncs → onTrue renders → defect
+          // reported → boundary swaps to fallback.
+          yield* broken.set(true);
+          yield* Effect.sleep("20 millis");
+          expect(document.querySelector(".boom")?.textContent).toBe("fallback");
+
+          // Flip back → onFalse renders → safeSync's `clear` fires →
+          // boundary auto-swaps back to the child.
+          yield* broken.set(false);
+          yield* Effect.sleep("20 millis");
+          expect(document.querySelector(".ok")?.textContent).toBe("ok");
+          expect(document.querySelector(".boom")).toBeNull();
+        }),
+      );
     });
   });
 

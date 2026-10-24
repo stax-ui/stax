@@ -1,5 +1,6 @@
 import { Cause, Clock, Effect, Either, Option } from "effect";
 
+import { ErrorBoundaryCtx } from "./Boundary.js";
 import { ControlCtx } from "./ControlCtx.js";
 import { logDebug, logError } from "./Debug.js";
 import type { Element } from "./Element.js";
@@ -168,13 +169,19 @@ export const reconcile = <A, E, R>(
     yield* ctx.finalizeContainer();
 
     // Wrap sync for the subscribe path: log every failure with an
-    // stax.reconcile subsystem tag and swallow the cause so the
-    // subscription fiber survives. Without this, one bad update freezes
-    // all future updates too — a user who navigates to a broken route
-    // can't recover by navigating away. The wrapping lives in core
-    // rather than each ControlCtx's subscribe impl because the semantics
-    // are inherent to reconcile (any subscribe strategy needs this),
-    // not to any particular DOM/hydration wiring.
+    // stax.reconcile subsystem tag and keep the subscription fiber
+    // alive so a broken update doesn't freeze every subsequent one.
+    //
+    // **Reporting to an error boundary.** On failure, if an ancestor
+    // Boundary has provided `ErrorBoundaryCtx`, we call its `report`
+    // method so it can swap in its fallback. On success, we call
+    // `clear` so a successful nav after a failed one auto-recovers
+    // the UI. Boundary not provided → both calls short-circuit on
+    // `Option.none()` and we behave exactly as before (log + swallow).
+    // That's the opt-in guarantee: existing callers see no change.
+    //
+    // The subscription fiber itself still survives either way — the
+    // boundary catches at render-swap time, not by killing the fiber.
     const safeSync = (value: A) =>
       sync(value).pipe(
         Effect.tapErrorCause((cause) =>
@@ -183,7 +190,24 @@ export const reconcile = <A, E, R>(
             cause: Cause.pretty(cause),
           }),
         ),
-        Effect.catchAllCause(() => Effect.void),
+        // On success: tell the boundary to clear so a prior fallback
+        // can swap back to the child. Runs only if sync returned OK.
+        Effect.tap(() =>
+          Effect.serviceOption(ErrorBoundaryCtx).pipe(
+            Effect.flatMap((svc) =>
+              Option.isSome(svc) ? svc.value.clear : Effect.void,
+            ),
+          ),
+        ),
+        // On failure: tell the boundary. If none installed, swallow
+        // (preserves subscription-survival guarantee).
+        Effect.catchAllCause((cause) =>
+          Effect.serviceOption(ErrorBoundaryCtx).pipe(
+            Effect.flatMap((svc) =>
+              Option.isSome(svc) ? svc.value.report(cause) : Effect.void,
+            ),
+          ),
+        ),
       );
 
     // Subscribe to future changes

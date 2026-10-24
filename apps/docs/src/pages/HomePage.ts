@@ -1,12 +1,16 @@
 import { Effect } from "effect";
 
-import { $ } from "@stax-ui/dom";
+import { $, RendererContext } from "@stax-ui/dom";
 
 import { CodeFile, CodeTabs } from "../components/CodeTabs.js";
 import { ContentSection } from "../components/ContentSection.js";
 import { Hero } from "../components/Hero.js";
 import { Nav } from "../components/Nav.js";
-import { TodoApp } from "../components/TodoApp/index.js";
+import {
+  StorageLive,
+  StorageNoOp,
+  TodoApp,
+} from "../components/TodoApp/index.js";
 
 // ─── Code examples ──────────────────────────────────────────────────────────
 
@@ -153,6 +157,14 @@ export const HomePage = (props: {
       todoFiles,
     } = props.codeExamples;
 
+    // TodoApp's source is displayed on this page as a demo, so the
+    // Storage wiring lives here (the component itself stays clean).
+    // Pick is env-aware — StorageNoOp seeds empty on SSR (no window),
+    // StorageLive reads/writes localStorage on client and hydration.
+    const renderer = yield* RendererContext;
+    const storageLayer =
+      renderer.environment === "ssr" ? StorageNoOp : StorageLive;
+
     return yield* $.div(
       { class: "flex flex-col lg:flex-row" },
       $.div({ class: "lg:border-r" }, Nav()),
@@ -219,7 +231,7 @@ export const HomePage = (props: {
                   ],
                 },
                 $.h3({ class: "text-heading-2 text-neutral" }, "Todo App"),
-                TodoApp(),
+                TodoApp().pipe(Effect.provide(storageLayer)),
               ),
             ),
           ),
