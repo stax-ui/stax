@@ -33,3 +33,21 @@ export class CspNonce extends Context.Tag("@stax-ui/dom/CspNonce")<
   CspNonce,
   CspNonceService
 >() {}
+
+/**
+ * Read the per-request CSP nonce the server embedded as
+ * `<meta property="csp-nonce" nonce="…">`. Returns `null` when the
+ * meta is absent (the overwhelmingly common case — no CSP configured
+ * on this response), so `hydrate` / `mount` can skip providing the
+ * `CspNonce` layer and keep the tag off every element factory's
+ * required `R` channel.
+ *
+ * Browsers only "hide" the nonce attribute on CSP-governed elements
+ * (script, style, link), not on meta — `getAttribute("nonce")` returns
+ * the real value, no polyfill needed.
+ */
+export const readMetaNonce = (): string | null => {
+  if (typeof document === "undefined") return null;
+  const meta = document.querySelector('meta[property="csp-nonce"]');
+  return meta?.getAttribute("nonce") ?? null;
+};

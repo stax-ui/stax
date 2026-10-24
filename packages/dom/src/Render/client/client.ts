@@ -37,24 +37,11 @@ import {
 
 import { ClientAsyncCacheLayer } from "../../ClientAsyncCache.js";
 import { ClientControlCtx } from "../../Control/ClientControlCtx.js";
-import { CspNonce } from "../../CspNonce.js";
+import { CspNonce, readMetaNonce } from "../../CspNonce.js";
 import * as Element from "../../Element/index.js";
 import { ClientSuspenseBoundaryCtx } from "../../SuspenseBoundaryCtx/ClientSuspenseBoundaryCtx.js";
 import { makeIdGeneratorLayer } from "../../UniqueId.js";
 import { DOMRenderer } from "../DOMRenderer.js";
-
-/**
- * Read the per-request CSP nonce the server embedded as
- * `<meta property="csp-nonce" nonce="…">`. Returns `null` when the
- * meta is absent (the overwhelmingly common case for a client-only
- * `mount` call — no CSP configured), so the layer can be built empty
- * and `CspNonce` never shows up in anyone's `R`.
- */
-const readMetaNonce = (): string | null => {
-  if (typeof document === "undefined") return null;
-  const meta = document.querySelector('meta[property="csp-nonce"]');
-  return meta?.getAttribute("nonce") ?? null;
-};
 
 /**
  * Provides the client-side rendering layers (Renderer, ControlCtx,

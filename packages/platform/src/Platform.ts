@@ -172,24 +172,29 @@ export const serializeForHtml = (data: unknown): string => {
 /**
  * Generate a cryptographically random Content Security Policy nonce.
  *
- * 16 random bytes, base64-encoded — the shape CSP's `script-src
- * 'nonce-…'` and `style-src 'nonce-…'` directives expect. 16 bytes
- * (128 bits of entropy) matches Google's recommended policy guidance
- * and is wide enough that an attacker can't realistically guess it
- * for a request they can observe.
+ * 16 random bytes (128 bits of entropy) from the platform CSPRNG —
+ * `crypto.getRandomValues`, the Web Crypto API primitive available
+ * globally on every modern browser and on Node 19+. Not a bespoke
+ * PRNG. 16 bytes is Google's recommended minimum for `script-src
+ * 'nonce-…'` and wide enough that an attacker can't realistically
+ * guess it for a request they can observe. The output is standard
+ * base64 — the shape the CSP directive expects as the nonce value.
  */
 export const generateCspNonce = (): string => {
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
-  // Buffer-based base64 for server runtimes (Node); `btoa` fallback for
-  // worker-style runtimes that don't ship `Buffer`.
+  // Fast path: Node has `Buffer`; use it directly without first
+  // marshalling bytes into a binary string for `btoa`.
+  if (typeof Buffer !== "undefined") {
+    return Buffer.from(bytes).toString("base64");
+  }
+  // Browser / worker-style runtimes without `Buffer` — `btoa` takes a
+  // binary string, so pack bytes one char at a time.
   let binary = "";
   for (let i = 0; i < bytes.length; i++) {
     binary += String.fromCharCode(bytes[i]);
   }
-  return typeof Buffer !== "undefined"
-    ? Buffer.from(bytes).toString("base64")
-    : btoa(binary);
+  return btoa(binary);
 };
 
 /**
