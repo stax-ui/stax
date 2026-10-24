@@ -5,14 +5,31 @@
  *
  * Walks every `packages/<name>/package.json`. Any that publishes to
  * `@stax-ui/*` must have a version starting with `0.`. If any package has
- * moved past 0.x, the script exits non-zero — the release flow refuses
- * to publish, and CI refuses to merge.
+ * moved past 0.x, the script exits non-zero.
+ *
+ * Runs at two points in the flow:
+ *
+ * 1. Inside `pnpm version` — right after `changeset version` writes the
+ *    new numbers — so a bad bump fails the Changesets action and the
+ *    version PR is never opened. This is the fail-fast path and the one
+ *    that keeps 1.x out of main.
+ * 2. At the top of the release workflow before `changeset publish`, so a
+ *    manually-authored 1.x number in main also blocks publishing.
  *
  * This exists because we accidentally shipped `@stax-ui/platform` and
  * `@stax-ui/vite-plugin` at `1.0.0` and then `2.0.0` while the rest of the
  * family was still at 0.x. The version numbers falsely implied API
  * stability. Rewound to 0.x via a one-time hand-edited republish; this
  * script keeps it from happening again.
+ *
+ * The most common trigger for an unwanted bump is Changesets' peer-dep
+ * escalation: a dependent package whose `peerDependencies` list a Stax
+ * package via `workspace:^` becomes semver-out-of-range when the peer
+ * minor-bumps on 0.x (because `^0.x.y` resolves to `>=0.x.y <0.(x+1).0`).
+ * Changesets then escalates the dependent to a major bump — which on a
+ * `0.0.0` package means `1.0.0`. If this fires, loosen the peer range in
+ * the dependent to accept the whole 0.x track (e.g. `workspace:>=0.1.0
+ * <1.0.0`) rather than hand-editing the generated version.
  *
  * When Stax is genuinely production-ready and we plan a coordinated 1.0
  * release across every package, delete or update this script — but only
