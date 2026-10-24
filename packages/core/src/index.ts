@@ -87,4 +87,4 @@ export {
 } from "./Control.js";
 
 // Debug logging
-export { logDebug, logError, type Subsystem } from "./Debug.js";
+export { logDebug, logError, logWarn, type Subsystem } from "./Debug.js";

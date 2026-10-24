@@ -1,5 +1,7 @@
 import { Effect } from "effect";
 
+import { logWarn } from "@stax-ui/core";
+
 import * as Element from "../Element/index.js";
 import type { AnimationEndResult, AnimationHook } from "./types.js";
 
@@ -104,12 +106,37 @@ const hasActiveAnimations = (element: HTMLElement): boolean => {
 /**
  * Minimal shape of the `Animation` interface we rely on so this file
  * stays usable in environments (older DOM lib targets, jsdom) that
- * don't declare the full API.
+ * don't declare the full API. Field names mirror the Web Animations
+ * spec (`Animation.effect`, `Animation.finished`); they are the DOM
+ * API we are consuming, not names we chose.
  */
 interface AnimationLike {
   readonly effect?: { readonly target?: Node | null } | null;
   readonly finished: Promise<unknown>;
+  readonly constructor?: { readonly name?: string };
 }
+
+/**
+ * Narrow shape of the element's `getAnimations` method used by the fast
+ * path. The DOM lib's `Element.getAnimations` returns `Animation[]`
+ * (whose `effect` is `AnimationEffect` without `.target`); we work
+ * against our own `AnimationLike` so the filter can read what it needs
+ * without widening the Web Animations surface. `getAnimationsOf` reads
+ * the method off an element through this narrower view in one place so
+ * the call site stays free of inline casts.
+ */
+interface ElementWithGetAnimations {
+  readonly getAnimations: (options?: { subtree?: boolean }) => AnimationLike[];
+}
+
+const getAnimationsOf = (
+  element: HTMLElement,
+): ElementWithGetAnimations["getAnimations"] | undefined => {
+  const narrowed = element as unknown as Partial<ElementWithGetAnimations>;
+  return typeof narrowed.getAnimations === "function"
+    ? narrowed.getAnimations.bind(narrowed)
+    : undefined;
+};
 
 /**
  * Wait for animation or transition to complete on an element.
@@ -152,16 +179,12 @@ export const waitForAnimationEvent = (
 
       // Fast path — `getAnimations` is the authoritative view of
       // what's actually running on this element.
-      const getAnimationsFn = (
-        element as unknown as {
-          getAnimations?: (options?: { subtree?: boolean }) => AnimationLike[];
-        }
-      ).getAnimations;
-      if (typeof getAnimationsFn === "function") {
+      const getAnimations = getAnimationsOf(element);
+      if (getAnimations) {
         // Default `subtree: false` scopes to this element, but older
         // Firefox builds return descendant animations anyway — filter
         // defensively by effect.target.
-        const all = getAnimationsFn.call(element);
+        const all = getAnimations();
         const own = all.filter((a) => {
           const target = a.effect?.target;
           return target === undefined || target === null || target === element;
@@ -174,15 +197,13 @@ export const waitForAnimationEvent = (
 
         let settled = false;
         const timeoutId = setTimeout(() => {
-          if (process.env.NODE_ENV !== "production") {
-            console.warn(
-              "[stax] Animation timeout reached. Running animations did " +
-                "not settle within the configured timeout. If this is " +
-                "unexpected, check the animation's duration or whether " +
-                "the element is receiving new animation triggers mid-run.",
-              element,
-            );
-          }
+          void Effect.runPromise(
+            logWarn(
+              "animation timeout: running animations did not settle before the configured timeout",
+              "stax.animation",
+              { timeout },
+            ),
+          );
           resolve({ endedBy: "timeout" });
         }, timeout);
 
@@ -194,14 +215,9 @@ export const waitForAnimationEvent = (
         void Promise.allSettled(own.map((a) => a.finished)).then(() => {
           if (settled) return;
           // Classify as "transition" when the longest matcher was a
-          // CSSTransition; otherwise "animation". Peek via a non-
-          // enumerable trick that works across engines without
-          // widening the type surface.
-          const kind = own.some(
-            (a) =>
-              (a as unknown as { constructor?: { name?: string } }).constructor
-                ?.name === "CSSTransition",
-          )
+          // CSSTransition; otherwise "animation". The DOM exposes the
+          // runtime class on the native `constructor.name`.
+          const kind = own.some((a) => a.constructor?.name === "CSSTransition")
             ? ("transition" as const)
             : ("animation" as const);
           resolve({ endedBy: kind });
@@ -227,16 +243,13 @@ export const waitForAnimationEvent = (
         resolve({ endedBy: "transition" });
       };
       const handleTimeout = () => {
-        if (process.env.NODE_ENV !== "production") {
-          console.warn(
-            "[stax] Animation timeout reached. The transitionend/animationend event " +
-              "did not fire. This usually means your CSS classes are missing the " +
-              "transition property. With Tailwind, ensure you have BOTH transition-* " +
-              "(e.g., transition-opacity) AND duration-* (e.g., duration-150). " +
-              "You may also need the ! prefix for specificity (e.g., !opacity-100).",
-            element,
-          );
-        }
+        void Effect.runPromise(
+          logWarn(
+            "animation timeout: transitionend/animationend did not fire — usually a missing transition-* / duration-* pair (Tailwind), or missing ! prefix for specificity",
+            "stax.animation",
+            { timeout },
+          ),
+        );
         resolve({ endedBy: "timeout" });
       };
 

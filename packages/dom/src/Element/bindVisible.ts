@@ -15,7 +15,7 @@
 
 import { Effect, Fiber, Ref, Stream } from "effect";
 
-import { Readable, RendererContext } from "@stax-ui/core";
+import { Readable, RendererContext, type Renderer } from "@stax-ui/core";
 
 import { runEnterAnimation, runExitAnimation } from "../Animation/core.js";
 import { parseClasses, runHook } from "../Animation/helpers.js";
@@ -125,6 +125,36 @@ const stripEnterTo = (
 };
 
 /**
+ * Set up the hidden attribute (and, when `manageDisplay`, the inline
+ * display rule) on the initial render path. Split out of the main
+ * builder so each branch is one `yield*` or one DOM write — not a stack
+ * of nested conditionals.
+ *
+ * SSR goes through the renderer so the output lands in the attribute
+ * string. The client / hydration branch calls `style.setProperty`
+ * directly so it can pass `important` (the renderer interface has no
+ * priority slot), which is what beats Tailwind's `display: block /
+ * flex` utilities.
+ */
+const applyInitialHidden = (
+  el: HTMLElement | SVGElement,
+  renderer: Renderer<unknown>,
+  hiddenValue: HiddenValue,
+  manageDisplay: boolean,
+): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    yield* renderer.setAttribute(el, "hidden", hiddenValue);
+    if (!manageDisplay) return;
+    if (renderer.environment === "ssr") {
+      yield* renderer.setStyleProperty(el, "display", DISPLAY_HIDDEN);
+      return;
+    }
+    if (el instanceof HTMLElement) {
+      el.style.setProperty("display", DISPLAY_HIDDEN, DISPLAY_PRIORITY);
+    }
+  });
+
+/**
  * Reactive show/hide binding. See the file-level docs for the full
  * contract.
  *
@@ -162,27 +192,7 @@ export const bindVisible =
       // on mount (client). During hydration the attributes are already
       // there from SSR; re-applying them is a no-op.
       if (!initial) {
-        yield* renderer.setAttribute(el, "hidden", hiddenValue);
-        if (manageDisplay) {
-          if (renderer.environment === "ssr") {
-            // SSR output goes through the renderer so it lands in the
-            // style attribute string. No priority support, but inline
-            // style still beats class-based rules by specificity, which
-            // is what matters for the hydration-stable "I rendered
-            // visible-false" state.
-            yield* renderer.setStyleProperty(el, "display", DISPLAY_HIDDEN);
-          } else {
-            // Client / hydration: direct DOM access so we can pass the
-            // `important` priority to the setProperty call, which
-            // beats Tailwind's `!` utilities too. The renderer
-            // interface has no priority slot.
-            (el as HTMLElement).style.setProperty(
-              "display",
-              DISPLAY_HIDDEN,
-              DISPLAY_PRIORITY,
-            );
-          }
-        }
+        yield* applyInitialHidden(el, renderer, hiddenValue, manageDisplay);
       }
 
       // Server rendering stops here — no fibers, no animation

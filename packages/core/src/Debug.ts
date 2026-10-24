@@ -109,6 +109,33 @@ export const traceSignalMethod = <
   }) as F;
 
 /**
+ * Emit a warning log annotated with an Stax subsystem tag.
+ *
+ * Sits between {@link logDebug} (opt-in) and {@link logError} (always on
+ * at Error level) — surfaces at Warning level so developers see
+ * recoverable misconfigurations (an animation timeout firing, a
+ * suspicious lifecycle flip) without pulling the whole Debug firehose
+ * down. Routes through the standard Effect `Logger` so users can
+ * raise/lower the level or ship warnings to a sink of their choice.
+ *
+ * @example
+ * ```ts
+ * yield* logWarn("animation timeout", "stax.animation", { timeout });
+ * ```
+ */
+export const logWarn = (
+  message: string,
+  subsystem: Subsystem,
+  data?: unknown,
+): Effect.Effect<void> => {
+  const log =
+    data === undefined
+      ? Effect.logWarning(message)
+      : Effect.logWarning(message, data);
+  return log.pipe(Effect.annotateLogs("subsystem", subsystem));
+};
+
+/**
  * Emit an error log annotated with an Stax subsystem tag.
  *
  * Unlike {@link logDebug}, this always emits at Error level — users see

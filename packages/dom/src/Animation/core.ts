@@ -97,42 +97,42 @@ const runAnimation = <E, R>(
     const el = yield* element;
     const touched = new Set<string>();
 
-    const addGroups = (groups: readonly (string | undefined)[]) => {
-      for (const g of groups) {
-        if (!g) continue;
-        for (const c of parseClasses(g)) {
-          touched.add(c);
-          el.classList.add(c);
-        }
-      }
+    // Flatten groups to a single de-duplicated class list once per
+    // phase, so each add/remove is a single variadic classList call
+    // instead of nested per-group iteration.
+    const addBeforeReflowClasses = flattenGroups(addBeforeReflow);
+    const removeAfterReflowClasses = flattenGroups(removeAfterReflow);
+    const addAfterReflowClasses = flattenGroups(addAfterReflow);
+    const removeAfterAnimationClasses = flattenGroups(removeAfterAnimation);
+
+    const addClasses = (classes: readonly string[]) => {
+      if (classes.length === 0) return;
+      for (const c of classes) touched.add(c);
+      el.classList.add(...classes);
     };
-    const removeGroups = (groups: readonly (string | undefined)[]) => {
-      for (const g of groups) {
-        if (!g) continue;
-        for (const c of parseClasses(g)) {
-          touched.add(c);
-          el.classList.remove(c);
-        }
-      }
+    const removeClasses = (classes: readonly string[]) => {
+      if (classes.length === 0) return;
+      for (const c of classes) touched.add(c);
+      el.classList.remove(...classes);
     };
 
     yield* logDebug(`${kind} animation: begin`, "stax.animation", {
-      addBeforeReflow: addBeforeReflow.filter(Boolean),
-      addAfterReflow: addAfterReflow.filter(Boolean),
+      addBeforeReflow: addBeforeReflowClasses,
+      addAfterReflow: addAfterReflowClasses,
     });
 
     const body = Effect.gen(function* () {
       yield* runHook(onBefore, element);
 
-      addGroups(addBeforeReflow);
+      addClasses(addBeforeReflowClasses);
       void el.offsetHeight; // force reflow
 
-      removeGroups(removeAfterReflow);
-      addGroups(addAfterReflow);
+      removeClasses(removeAfterReflowClasses);
+      addClasses(addAfterReflowClasses);
 
       const outcome = yield* waitForAnimationEvent(el, timeout);
 
-      removeGroups(removeAfterAnimation);
+      removeClasses(removeAfterAnimationClasses);
 
       yield* runHook(onAfter, element);
 
@@ -146,17 +146,31 @@ const runAnimation = <E, R>(
       Effect.tap(() => Effect.sync(() => (completed = true))),
       Effect.ensuring(
         Effect.sync(() => {
-          if (completed) return;
+          if (completed || touched.size === 0) return;
           // Interrupt mid-run: strip every class the run put on the
           // element so a subsequent run (e.g. a reverse exit after an
           // enter was interrupted) doesn't inherit stale state. Removing
           // a class that was never added is a no-op, so this is safe
           // even when the interrupt fires early.
-          for (const c of touched) el.classList.remove(c);
+          el.classList.remove(...touched);
         }),
       ),
     );
   }) as Effect.Effect<void, E, R>;
+
+/**
+ * Collapse a list of space-separated class groups (any of which may be
+ * `undefined`) into a flat array of individual classes. Removes the
+ * group→class→class nested-iteration pattern at every call site.
+ */
+const flattenGroups = (groups: readonly (string | undefined)[]): string[] => {
+  const out: string[] = [];
+  for (const g of groups) {
+    if (!g) continue;
+    for (const c of parseClasses(g)) out.push(c);
+  }
+  return out;
+};
 
 /**
  * Run an enter animation on an element.
