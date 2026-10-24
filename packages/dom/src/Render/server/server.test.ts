@@ -1,10 +1,11 @@
-import { Effect } from "effect";
+import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { Readable, Signal } from "@stax-ui/core";
 
 import { Boundary } from "../../Boundary.js";
 import { animated, each, match, when } from "../../Control/index.js";
+import { CspNonce } from "../../CspNonce.js";
 import { $ } from "../../Element/index.js";
 import { renderToString } from "./index.js";
 
@@ -468,6 +469,56 @@ describe("SSR", () => {
 
       const ids = idsIn(html);
       expect(ids).toEqual(["stax-1", "stax-2"]);
+    });
+  });
+
+  describe("CSP nonce stamping", () => {
+    const withNonce = <A, E, R>(
+      effect: Effect.Effect<A, E, R>,
+      nonce: string,
+    ) => effect.pipe(Effect.provide(Layer.succeed(CspNonce, { nonce })));
+
+    it("stamps $.script with the ambient CspNonce", async () => {
+      const html = await Effect.runPromise(
+        withNonce(renderToString($.script({ src: "/app.js" })), "r4nd0m"),
+      );
+      expect(html).toContain('nonce="r4nd0m"');
+    });
+
+    it("stamps $.style with the ambient CspNonce", async () => {
+      const html = await Effect.runPromise(
+        withNonce(renderToString($.style({}, ".x{color:red}")), "r4nd0m"),
+      );
+      expect(html).toContain('nonce="r4nd0m"');
+    });
+
+    it("leaves other elements alone", async () => {
+      // The divergence lives at `$.script` / `$.style` only — `$.div`
+      // etc. don't carry the enableCspNonce behavior.
+      const html = await Effect.runPromise(
+        withNonce(renderToString($.div({ class: "foo" }, "hi")), "r4nd0m"),
+      );
+      expect(html).not.toContain("nonce=");
+    });
+
+    it("an explicit `nonce` prop beats the ambient one", async () => {
+      // Rare but legitimate: a third-party script tag whose policy
+      // sources its own nonce. User-supplied wins.
+      const html = await Effect.runPromise(
+        withNonce(
+          renderToString($.script({ src: "/app.js", nonce: "user-supplied" })),
+          "ambient",
+        ),
+      );
+      expect(html).toContain('nonce="user-supplied"');
+      expect(html).not.toContain('nonce="ambient"');
+    });
+
+    it("no CspNonce in scope → no nonce stamped (default behavior)", async () => {
+      const html = await Effect.runPromise(
+        renderToString($.script({ src: "/app.js" })),
+      );
+      expect(html).not.toContain("nonce=");
     });
   });
 });

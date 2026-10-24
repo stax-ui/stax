@@ -33,7 +33,9 @@ import {
 
 import {
   AsyncCache,
+  CspNonce,
   Element,
+  logWarn,
   makeAsyncCache,
   makeIdGeneratorLayer,
   RendererContext,
@@ -70,6 +72,50 @@ export interface DocumentOptions {
   readonly htmlAttrs?: Record<string, string>;
 }
 
+/**
+ * Per-request Content Security Policy configuration.
+ *
+ * Opt in by passing a `csp` option to {@link toHttpRoutes}. The
+ * platform then generates a nonce for each GET response, provides it
+ * via `CspNonce` (so `$.script` and `$.style` stamp it onto their
+ * attributes), embeds a `<meta property="csp-nonce">` tag so the
+ * hydrated client picks the nonce back up, applies the nonce to any
+ * stylesheets and module scripts declared in `document`, and
+ * optionally sets the response header for you.
+ */
+export interface CspOptions {
+  /**
+   * How to source the nonce for each response.
+   *
+   * - `true` → stax generates a fresh nonce per response (16 random
+   *   bytes, base64-encoded, via `crypto.getRandomValues`).
+   * - a function → the caller supplies the nonce. Useful when
+   *   upstream middleware (a reverse proxy, an auth layer) is already
+   *   rotating one and wants stax to reuse it.
+   */
+  readonly nonce: true | ((request: unknown) => string);
+  /**
+   * If set, stax writes the `Content-Security-Policy` response header
+   * for you.
+   *
+   * - a string → sent verbatim. For policies with no `'nonce-…'`
+   *   source, where the caller already baked the value in.
+   * - a function → receives the per-request nonce. The standard
+   *   shape when the policy wants `'nonce-{nonce}'`.
+   *
+   * Omit when you want to set the header yourself (e.g. in a reverse
+   * proxy, or in a `setHeaders` middleware around the HttpRouter).
+   */
+  readonly policy?: string | ((nonce: string) => string);
+  /**
+   * Send `Content-Security-Policy-Report-Only` instead of the
+   * enforcing header. Useful during rollout: violations show up in
+   * the browser console and (if configured) at `report-uri` /
+   * `report-to`, without blocking anything.
+   */
+  readonly reportOnly?: boolean;
+}
+
 export interface ToHttpRoutesOptions {
   /** Document generation options */
   readonly document?: DocumentOptions;
@@ -90,6 +136,11 @@ export interface ToHttpRoutesOptions {
     | SuspenseBoundaryCtx
     | Scope.Scope
   >;
+  /**
+   * Opt into per-request Content Security Policy nonces. See
+   * {@link CspOptions}.
+   */
+  readonly csp?: CspOptions;
 }
 
 // =============================================================================
@@ -119,13 +170,57 @@ export const serializeForHtml = (data: unknown): string => {
 };
 
 /**
- * Generate the script tag for embedding loader data
+ * Generate a cryptographically random Content Security Policy nonce.
+ *
+ * 16 random bytes (128 bits of entropy) from the platform CSPRNG —
+ * `crypto.getRandomValues`, the Web Crypto API primitive available
+ * globally on every modern browser and on Node 19+. Not a bespoke
+ * PRNG. 16 bytes is Google's recommended minimum for `script-src
+ * 'nonce-…'` and wide enough that an attacker can't realistically
+ * guess it for a request they can observe. The output is standard
+ * base64 — the shape the CSP directive expects as the nonce value.
+ */
+export const generateCspNonce = (): string => {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  // Fast path: Node has `Buffer`; use it directly without first
+  // marshalling bytes into a binary string for `btoa`.
+  if (typeof Buffer !== "undefined") {
+    return Buffer.from(bytes).toString("base64");
+  }
+  // Browser / worker-style runtimes without `Buffer` — `btoa` takes a
+  // binary string, so pack bytes one char at a time.
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+};
+
+/**
+ * Generate the script tag for embedding loader data.
+ *
+ * Emits a `type="application/json"` data block (NOT an executable
+ * script):
+ *
+ * ```html
+ * <script type="application/json" id="__stax_data">{...}</script>
+ * ```
+ *
+ * **Why this shape:** the browser never *executes* a non-JS script
+ * type, so this element isn't subject to `script-src` under a CSP
+ * policy. SSG output can run under a plain `script-src 'self'` with
+ * no nonces and no inline-script hashes; strict `script-src 'nonce-…'
+ * 'strict-dynamic'` on SSR also works since nothing here needs
+ * executing.
  */
 export const generateLoaderDataScript = (
   loaderData: Record<string, unknown>,
 ): string => {
   if (Object.keys(loaderData).length === 0) return "";
-  return `<script>window.__STAX_DATA__=${serializeForHtml(loaderData)}</script>`;
+  return `<script type="application/json" id="__stax_data">${serializeForHtml(
+    loaderData,
+  )}</script>`;
 };
 
 /**
@@ -136,6 +231,15 @@ export const generateDocument = (
   loaderData: Record<string, unknown>,
   options?: DocumentOptions,
   meta?: { title?: string; description?: string },
+  /**
+   * Per-request Content Security Policy nonce. When present, every
+   * `<script>` and stylesheet `<link>` emitted here carries
+   * `nonce="…"`, and `<meta property="csp-nonce" nonce="…">` is
+   * added to `<head>` so client-side code (via `hydrate` / `mount`)
+   * can pick the value back up for stamping onto scripts and styles
+   * it creates post-mount.
+   */
+  nonce?: string,
 ): string => {
   // Route-level meta overrides document-level options
   const titleText = meta?.title ?? options?.title;
@@ -143,14 +247,16 @@ export const generateDocument = (
   const description = meta?.description
     ? `<meta name="description" content="${meta.description.replace(/"/g, "&quot;")}">`
     : "";
+  const nonceAttr = nonce ? ` nonce="${nonce}"` : "";
   const styles = (options?.styles ?? [])
-    .map((href) => `<link rel="stylesheet" href="${href}">`)
+    .map((href) => `<link rel="stylesheet" href="${href}"${nonceAttr}>`)
     .join("\n    ");
   const scripts = (options?.scripts ?? [])
-    .map((src) => `<script type="module" src="${src}"></script>`)
+    .map((src) => `<script type="module" src="${src}"${nonceAttr}></script>`)
     .join("\n    ");
   const head = options?.head ?? "";
   const loaderScript = generateLoaderDataScript(loaderData);
+  const cspMeta = nonce ? `<meta property="csp-nonce" nonce="${nonce}">` : "";
   const htmlAttrs = options?.htmlAttrs
     ? " " +
       Object.entries(options.htmlAttrs)
@@ -163,6 +269,7 @@ export const generateDocument = (
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    ${cspMeta}
     ${title}
     ${description}
     ${styles}
@@ -444,6 +551,22 @@ export const toHttpRoutes = <
       // (also starts at zero). See #173.
       const idGeneratorLayer = makeIdGeneratorLayer();
 
+      // Per-request CSP nonce. Generated / sourced once per request so
+      // the renderer, the embedded `csp-nonce` meta tag, the `<script
+      // type="module">` and stylesheet `<link>` tags in the shell, and
+      // the response header all agree. Absent `options.csp` → no layer
+      // provided → `CspNonce` stays off the required-R channel for
+      // every non-CSP app.
+      const perRequestNonce = options?.csp
+        ? options.csp.nonce === true
+          ? generateCspNonce()
+          : options.csp.nonce(serverRequest)
+        : null;
+      const cspNonceLayer =
+        perRequestNonce !== null
+          ? Layer.succeed(CspNonce, { nonce: perRequestNonce })
+          : Layer.empty;
+
       // Render to string
       let html: string;
 
@@ -458,6 +581,7 @@ export const toHttpRoutes = <
               routeDataProviderLayer,
               asyncCacheLayer,
               idGeneratorLayer,
+              cspNonceLayer,
             ),
           ),
         );
@@ -483,6 +607,7 @@ export const toHttpRoutes = <
               routeDataProviderLayer,
               asyncCacheLayer,
               idGeneratorLayer,
+              cspNonceLayer,
             ),
           ),
         );
@@ -504,14 +629,30 @@ export const toHttpRoutes = <
         actions: actionPaths,
       };
 
-      return HttpServerResponse.html(
-        generateDocument(
-          html,
-          hydrationData,
-          options?.document,
-          routeMetaResolved,
-        ),
+      const document = generateDocument(
+        html,
+        hydrationData,
+        options?.document,
+        routeMetaResolved,
+        perRequestNonce ?? undefined,
       );
+
+      let response = HttpServerResponse.html(document);
+      if (options?.csp?.policy && perRequestNonce !== null) {
+        const policyStr =
+          typeof options.csp.policy === "function"
+            ? options.csp.policy(perRequestNonce)
+            : options.csp.policy;
+        const headerName = options.csp.reportOnly
+          ? "content-security-policy-report-only"
+          : "content-security-policy";
+        response = HttpServerResponse.setHeader(
+          response,
+          headerName,
+          policyStr,
+        );
+      }
+      return response;
     });
 
     // Register GET handler with error logging
@@ -636,16 +777,12 @@ export const toHttpRoutes = <
 // Client Layer
 // =============================================================================
 
-declare const window: Window & {
-  __STAX_DATA__?: Record<string, unknown>;
-};
-
 /**
  * Create a client-side Layer that provides NavigationContext and RouteDataProvider.
  *
- * On the first call (hydration), reads data from `window.__STAX_DATA__`.
- * On subsequent calls (client-side navigation), fetches from the server
- * via `?_data=1`.
+ * On the first call (hydration), reads data from the embedded SSR
+ * `<script type="application/json" id="__stax_data">` block. On
+ * subsequent calls (client-side navigation), fetches from the server.
  *
  * @example
  * ```ts
@@ -663,17 +800,38 @@ declare const window: Window & {
  * ```
  */
 /**
- * Extract embedded `window.__STAX_DATA__` from a page's HTML.
+ * Read the embedded hydration data from the current document, by `id`.
  *
- * SSG deploys serve the same HTML for `<path>` and `<path>?_data=1`, so when
- * `makeClientLayer`'s data fetch gets HTML back, we scan for the loader-data
- * `<script>` tag emitted by {@link generateLoaderDataScript}. The JSON inside
- * uses \\uXXXX escapes for script-breaking characters (see {@link serializeForHtml}),
- * which JSON.parse handles natively.
+ * Called once at hydration time by `makeClientLayer`'s first-load
+ * branch. Returns `undefined` when the block is absent, which is the
+ * legitimate state for routes with no loader data.
+ */
+const readEmbeddedHydrationData = (): Record<string, unknown> | undefined => {
+  if (typeof document === "undefined") return undefined;
+  const el = document.getElementById("__stax_data");
+  if (!el?.textContent) return undefined;
+  try {
+    return JSON.parse(el.textContent) as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * Extract the embedded hydration data block from a page's HTML.
+ *
+ * SSG deploys serve the same HTML for `<path>` and `<path>?_data=1`,
+ * so when `makeClientLayer`'s data fetch gets HTML back, we scan for
+ * the loader-data `<script>` block emitted by
+ * {@link generateLoaderDataScript}. The JSON uses `\\uXXXX` escapes
+ * for script-breaking characters (see {@link serializeForHtml}), which
+ * `JSON.parse` handles natively.
  */
 const extractEmbeddedRouteData = (html: string): unknown => {
+  // `type="application/json"` data block. Any attribute order; the
+  // required id anchors the match.
   const match = html.match(
-    /<script[^>]*>\s*window\.__STAX_DATA__\s*=\s*(.+?)\s*<\/script>/s,
+    /<script\b[^>]*\bid=["']__stax_data["'][^>]*>\s*([\s\S]+?)\s*<\/script>/,
   );
   if (!match) return undefined;
   try {
@@ -709,12 +867,9 @@ export const makeClientLayer = <
             if (first) {
               yield* Ref.set(isFirstLoad, false);
 
-              // Hydration: read embedded data from SSR
-              const embedded =
-                typeof window !== "undefined"
-                  ? window.__STAX_DATA__
-                  : undefined;
-
+              // Hydration: read the embedded SSR blob from the
+              // non-executable `type="application/json"` data block.
+              const embedded = readEmbeddedHydrationData();
               if (embedded) {
                 return embedded as unknown as RouteDataService;
               }
@@ -800,9 +955,11 @@ export const makeClientLayer = <
               // Static host served HTML but we couldn't find the data blob.
               // Not fatal — some routes may legitimately have no loader data
               // — but log it so a broken build/deploy doesn't sit invisible.
-              yield* Console.warn(
-                `[@stax-ui/platform] Fetched HTML for ${path} but couldn't find window.__STAX_DATA__. ` +
-                  `Continuing with data: undefined. (Does your SSG build emit \`_data.json\` siblings?)`,
+              yield* logWarn(
+                "fetched HTML for a route but couldn't find the embedded " +
+                  "hydration data block — continuing with data: undefined",
+                "stax.platform",
+                { path, expectedId: "__stax_data" },
               );
             }
             return {

@@ -27,6 +27,7 @@ import {
   HydrationControlCtx,
   HydrationRootCtx,
 } from "../../Control/HydrationControlCtx.js";
+import { CspNonce, readMetaNonce } from "../../CspNonce.js";
 import * as Element from "../../Element/index.js";
 import { HydrationSuspenseBoundaryCtx } from "../../SuspenseBoundaryCtx/HydrationSuspenseBoundaryCtx.js";
 import { makeIdGeneratorLayer } from "../../UniqueId.js";
@@ -133,6 +134,18 @@ export function hydrate<
     // this, SSR-generated ARIA references break after hydration
     // (see #173).
     elementLayers = Layer.merge(elementLayers, makeIdGeneratorLayer());
+    // Pick up the CSP nonce the server embedded, if any. Absent → no
+    // layer added → consumers' `Effect.serviceOption(CspNonce)` returns
+    // `None` → stock behavior (no nonce stamping). This matches the
+    // "every consumer uses serviceOption" rule — CspNonce never shows
+    // up in anyone's required `R`.
+    const metaNonce = readMetaNonce();
+    if (metaNonce !== null) {
+      elementLayers = Layer.merge(
+        elementLayers,
+        Layer.succeed(CspNonce, { nonce: metaNonce }),
+      );
+    }
     if (opts.layers) {
       elementLayers = Layer.merge(
         elementLayers,

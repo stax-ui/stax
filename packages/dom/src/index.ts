@@ -78,6 +78,11 @@ export type {
 export { Boundary, suspense, error } from "./Boundary.js";
 export type { SuspenseOptions, BoundarySuspenseOptions } from "./Boundary.js";
 
+// CSP support — the service tag. See `./CspNonce.ts` for who provides
+// it and how `$.script` / `$.style` consume it via `enableCspNonce`.
+export { CspNonce } from "./CspNonce.js";
+export type { CspNonceService } from "./CspNonce.js";
+
 // Context provision
 export { provide } from "./Provide.js";
 

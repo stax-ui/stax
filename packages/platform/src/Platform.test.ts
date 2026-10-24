@@ -11,17 +11,18 @@ import { Route, Router } from "@stax-ui/router";
 import {
   buildStaticSite,
   generateDocument,
+  generateLoaderDataScript,
   serializeForHtml,
 } from "./Platform.js";
 
 /**
- * The extractEmbeddedRouteData helper lives inline in Platform.ts. We
- * duplicate the same regex here to keep the test coupled to the emitted
- * script shape rather than to the private helper.
+ * The real `extractEmbeddedRouteData` helper lives inline in
+ * `Platform.ts`. Duplicating it here keeps the test coupled to the
+ * emitted script shape rather than to the private helper's identity.
  */
 const extractEmbeddedRouteData = (html: string): unknown => {
   const match = html.match(
-    /<script[^>]*>\s*window\.__STAX_DATA__\s*=\s*(.+?)\s*<\/script>/s,
+    /<script\b[^>]*\bid=["']__stax_data["'][^>]*>\s*([\s\S]+?)\s*<\/script>/,
   );
   if (!match) return undefined;
   try {
@@ -31,8 +32,79 @@ const extractEmbeddedRouteData = (html: string): unknown => {
   }
 };
 
+describe("generateCspNonce", () => {
+  it("produces a 128-bit base64 string", async () => {
+    const { generateCspNonce } = await import("./Platform.js");
+    const nonce = generateCspNonce();
+    // 16 bytes of entropy → 24 base64 chars (including the `=` padding).
+    expect(nonce).toMatch(/^[A-Za-z0-9+/]{22}==$/);
+  });
+
+  it("returns a different value each call", async () => {
+    const { generateCspNonce } = await import("./Platform.js");
+    const a = generateCspNonce();
+    const b = generateCspNonce();
+    // 128 bits — any match would mean we're not actually randomising.
+    expect(a).not.toBe(b);
+  });
+});
+
+describe("generateDocument with a CSP nonce", () => {
+  it("stamps the nonce onto the embedded meta tag, scripts, and stylesheets", async () => {
+    const { generateDocument } = await import("./Platform.js");
+    const html = generateDocument(
+      "<div>hi</div>",
+      { data: null, actions: {} },
+      {
+        title: "x",
+        scripts: ["/assets/client.js"],
+        styles: ["/assets/style.css"],
+      },
+      undefined,
+      "QRJ4Txe/",
+    );
+    expect(html).toContain('<meta property="csp-nonce" nonce="QRJ4Txe/">');
+    expect(html).toContain(
+      '<script type="module" src="/assets/client.js" nonce="QRJ4Txe/"></script>',
+    );
+    expect(html).toContain(
+      '<link rel="stylesheet" href="/assets/style.css" nonce="QRJ4Txe/">',
+    );
+  });
+
+  it("omits all nonce stamping when no nonce is passed", async () => {
+    const { generateDocument } = await import("./Platform.js");
+    const html = generateDocument(
+      "<div>hi</div>",
+      { data: null, actions: {} },
+      { scripts: ["/assets/client.js"], styles: ["/assets/style.css"] },
+    );
+    expect(html).not.toContain("nonce=");
+    expect(html).not.toContain("csp-nonce");
+  });
+});
+
+describe("generateLoaderDataScript", () => {
+  it('emits a non-executable `type="application/json"` data block', () => {
+    // The whole point of the new shape — CSP's `script-src` doesn't
+    // apply to non-JS script types, so this works under
+    // `script-src 'self'` with no nonces and no hashes.
+    const script = generateLoaderDataScript({ data: { name: "Jon" } });
+    expect(script).toContain('type="application/json"');
+    expect(script).toContain('id="__stax_data"');
+    // Confirming no executable form sneaked in.
+    expect(script).not.toContain("window.__STAX_DATA__");
+  });
+
+  it("returns an empty string for empty loader data", () => {
+    // No block means nothing to parse at hydration time, so the
+    // `undefined` branch in the client reader is exercised legitimately.
+    expect(generateLoaderDataScript({})).toBe("");
+  });
+});
+
 describe("static-host data fallback (makeClientLayer)", () => {
-  it("extracts the embedded __STAX_DATA__ blob from generateDocument output", () => {
+  it("extracts the embedded data block from generateDocument output", () => {
     const payload = { data: { name: "Jon" }, actions: {} };
     const html = generateDocument("<div>hi</div>", payload);
 
@@ -42,7 +114,8 @@ describe("static-host data fallback (makeClientLayer)", () => {
 
   it("survives payloads with script-breaking characters", () => {
     // These are exactly the characters serializeForHtml escapes — the round
-    // trip has to preserve them.
+    // trip has to preserve them. The `</script>` string specifically must
+    // not break out of the data block.
     const payload = {
       data: {
         html: "<script>alert('xss')</script>",
@@ -57,13 +130,14 @@ describe("static-host data fallback (makeClientLayer)", () => {
     expect(extracted).toEqual(payload);
   });
 
-  it("returns undefined when no __STAX_DATA__ script is present", () => {
+  it("returns undefined when no data block is present", () => {
     const html = "<html><body><div>no data here</div></body></html>";
     expect(extractEmbeddedRouteData(html)).toBeUndefined();
   });
 
-  it("returns undefined when the script content is malformed JSON", () => {
-    const html = "<script>window.__STAX_DATA__=not-json</script>";
+  it("returns undefined when the data block content is malformed JSON", () => {
+    const html =
+      '<script type="application/json" id="__stax_data">not-json</script>';
     expect(extractEmbeddedRouteData(html)).toBeUndefined();
   });
 
