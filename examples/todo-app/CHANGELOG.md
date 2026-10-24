@@ -1,5 +1,14 @@
 # todo-app
 
+## 0.0.13
+
+### Patch Changes
+
+- Updated dependencies [0ed74c9]
+- Updated dependencies [c9ef356]
+- Updated dependencies [14b1cdd]
+  - @stax-ui/dom@0.11.0
+
 ## 0.0.12
 
 ### Patch Changes
