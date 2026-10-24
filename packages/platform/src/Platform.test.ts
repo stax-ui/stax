@@ -32,6 +32,58 @@ const extractEmbeddedRouteData = (html: string): unknown => {
   }
 };
 
+describe("generateCspNonce", () => {
+  it("produces a 128-bit base64 string", async () => {
+    const { generateCspNonce } = await import("./Platform.js");
+    const nonce = generateCspNonce();
+    // 16 bytes of entropy → 24 base64 chars (including the `=` padding).
+    expect(nonce).toMatch(/^[A-Za-z0-9+/]{22}==$/);
+  });
+
+  it("returns a different value each call", async () => {
+    const { generateCspNonce } = await import("./Platform.js");
+    const a = generateCspNonce();
+    const b = generateCspNonce();
+    // 128 bits — any match would mean we're not actually randomising.
+    expect(a).not.toBe(b);
+  });
+});
+
+describe("generateDocument with a CSP nonce", () => {
+  it("stamps the nonce onto the embedded meta tag, scripts, and stylesheets", async () => {
+    const { generateDocument } = await import("./Platform.js");
+    const html = generateDocument(
+      "<div>hi</div>",
+      { data: null, actions: {} },
+      {
+        title: "x",
+        scripts: ["/assets/client.js"],
+        styles: ["/assets/style.css"],
+      },
+      undefined,
+      "QRJ4Txe/",
+    );
+    expect(html).toContain('<meta property="csp-nonce" nonce="QRJ4Txe/">');
+    expect(html).toContain(
+      '<script type="module" src="/assets/client.js" nonce="QRJ4Txe/"></script>',
+    );
+    expect(html).toContain(
+      '<link rel="stylesheet" href="/assets/style.css" nonce="QRJ4Txe/">',
+    );
+  });
+
+  it("omits all nonce stamping when no nonce is passed", async () => {
+    const { generateDocument } = await import("./Platform.js");
+    const html = generateDocument(
+      "<div>hi</div>",
+      { data: null, actions: {} },
+      { scripts: ["/assets/client.js"], styles: ["/assets/style.css"] },
+    );
+    expect(html).not.toContain("nonce=");
+    expect(html).not.toContain("csp-nonce");
+  });
+});
+
 describe("generateLoaderDataScript", () => {
   it('emits a non-executable `type="application/json"` data block', () => {
     // The whole point of the new shape — CSP's `script-src` doesn't

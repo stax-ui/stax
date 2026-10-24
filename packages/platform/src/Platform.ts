@@ -33,6 +33,7 @@ import {
 
 import {
   AsyncCache,
+  CspNonce,
   Element,
   logWarn,
   makeAsyncCache,
@@ -71,6 +72,50 @@ export interface DocumentOptions {
   readonly htmlAttrs?: Record<string, string>;
 }
 
+/**
+ * Per-request Content Security Policy configuration.
+ *
+ * Opt in by passing a `csp` option to {@link toHttpRoutes}. The
+ * platform then generates a nonce for each GET response, provides it
+ * via `CspNonce` (so `$.script` and `$.style` stamp it onto their
+ * attributes), embeds a `<meta property="csp-nonce">` tag so the
+ * hydrated client picks the nonce back up, applies the nonce to any
+ * stylesheets and module scripts declared in `document`, and
+ * optionally sets the response header for you.
+ */
+export interface CspOptions {
+  /**
+   * How to source the nonce for each response.
+   *
+   * - `true` → stax generates a fresh nonce per response (16 random
+   *   bytes, base64-encoded, via `crypto.getRandomValues`).
+   * - a function → the caller supplies the nonce. Useful when
+   *   upstream middleware (a reverse proxy, an auth layer) is already
+   *   rotating one and wants stax to reuse it.
+   */
+  readonly nonce: true | ((request: unknown) => string);
+  /**
+   * If set, stax writes the `Content-Security-Policy` response header
+   * for you.
+   *
+   * - a string → sent verbatim. For policies with no `'nonce-…'`
+   *   source, where the caller already baked the value in.
+   * - a function → receives the per-request nonce. The standard
+   *   shape when the policy wants `'nonce-{nonce}'`.
+   *
+   * Omit when you want to set the header yourself (e.g. in a reverse
+   * proxy, or in a `setHeaders` middleware around the HttpRouter).
+   */
+  readonly policy?: string | ((nonce: string) => string);
+  /**
+   * Send `Content-Security-Policy-Report-Only` instead of the
+   * enforcing header. Useful during rollout: violations show up in
+   * the browser console and (if configured) at `report-uri` /
+   * `report-to`, without blocking anything.
+   */
+  readonly reportOnly?: boolean;
+}
+
 export interface ToHttpRoutesOptions {
   /** Document generation options */
   readonly document?: DocumentOptions;
@@ -91,6 +136,11 @@ export interface ToHttpRoutesOptions {
     | SuspenseBoundaryCtx
     | Scope.Scope
   >;
+  /**
+   * Opt into per-request Content Security Policy nonces. See
+   * {@link CspOptions}.
+   */
+  readonly csp?: CspOptions;
 }
 
 // =============================================================================
@@ -117,6 +167,29 @@ export const serializeForHtml = (data: unknown): string => {
     .replace(/</g, "\\u003c")
     .replace(/>/g, "\\u003e")
     .replace(/&/g, "\\u0026");
+};
+
+/**
+ * Generate a cryptographically random Content Security Policy nonce.
+ *
+ * 16 random bytes, base64-encoded — the shape CSP's `script-src
+ * 'nonce-…'` and `style-src 'nonce-…'` directives expect. 16 bytes
+ * (128 bits of entropy) matches Google's recommended policy guidance
+ * and is wide enough that an attacker can't realistically guess it
+ * for a request they can observe.
+ */
+export const generateCspNonce = (): string => {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  // Buffer-based base64 for server runtimes (Node); `btoa` fallback for
+  // worker-style runtimes that don't ship `Buffer`.
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return typeof Buffer !== "undefined"
+    ? Buffer.from(bytes).toString("base64")
+    : btoa(binary);
 };
 
 /**
@@ -153,6 +226,15 @@ export const generateDocument = (
   loaderData: Record<string, unknown>,
   options?: DocumentOptions,
   meta?: { title?: string; description?: string },
+  /**
+   * Per-request Content Security Policy nonce. When present, every
+   * `<script>` and stylesheet `<link>` emitted here carries
+   * `nonce="…"`, and `<meta property="csp-nonce" nonce="…">` is
+   * added to `<head>` so client-side code (via `hydrate` / `mount`)
+   * can pick the value back up for stamping onto scripts and styles
+   * it creates post-mount.
+   */
+  nonce?: string,
 ): string => {
   // Route-level meta overrides document-level options
   const titleText = meta?.title ?? options?.title;
@@ -160,14 +242,16 @@ export const generateDocument = (
   const description = meta?.description
     ? `<meta name="description" content="${meta.description.replace(/"/g, "&quot;")}">`
     : "";
+  const nonceAttr = nonce ? ` nonce="${nonce}"` : "";
   const styles = (options?.styles ?? [])
-    .map((href) => `<link rel="stylesheet" href="${href}">`)
+    .map((href) => `<link rel="stylesheet" href="${href}"${nonceAttr}>`)
     .join("\n    ");
   const scripts = (options?.scripts ?? [])
-    .map((src) => `<script type="module" src="${src}"></script>`)
+    .map((src) => `<script type="module" src="${src}"${nonceAttr}></script>`)
     .join("\n    ");
   const head = options?.head ?? "";
   const loaderScript = generateLoaderDataScript(loaderData);
+  const cspMeta = nonce ? `<meta property="csp-nonce" nonce="${nonce}">` : "";
   const htmlAttrs = options?.htmlAttrs
     ? " " +
       Object.entries(options.htmlAttrs)
@@ -180,6 +264,7 @@ export const generateDocument = (
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    ${cspMeta}
     ${title}
     ${description}
     ${styles}
@@ -461,6 +546,22 @@ export const toHttpRoutes = <
       // (also starts at zero). See #173.
       const idGeneratorLayer = makeIdGeneratorLayer();
 
+      // Per-request CSP nonce. Generated / sourced once per request so
+      // the renderer, the embedded `csp-nonce` meta tag, the `<script
+      // type="module">` and stylesheet `<link>` tags in the shell, and
+      // the response header all agree. Absent `options.csp` → no layer
+      // provided → `CspNonce` stays off the required-R channel for
+      // every non-CSP app.
+      const perRequestNonce = options?.csp
+        ? options.csp.nonce === true
+          ? generateCspNonce()
+          : options.csp.nonce(serverRequest)
+        : null;
+      const cspNonceLayer =
+        perRequestNonce !== null
+          ? Layer.succeed(CspNonce, { nonce: perRequestNonce })
+          : Layer.empty;
+
       // Render to string
       let html: string;
 
@@ -475,6 +576,7 @@ export const toHttpRoutes = <
               routeDataProviderLayer,
               asyncCacheLayer,
               idGeneratorLayer,
+              cspNonceLayer,
             ),
           ),
         );
@@ -500,6 +602,7 @@ export const toHttpRoutes = <
               routeDataProviderLayer,
               asyncCacheLayer,
               idGeneratorLayer,
+              cspNonceLayer,
             ),
           ),
         );
@@ -521,14 +624,30 @@ export const toHttpRoutes = <
         actions: actionPaths,
       };
 
-      return HttpServerResponse.html(
-        generateDocument(
-          html,
-          hydrationData,
-          options?.document,
-          routeMetaResolved,
-        ),
+      const document = generateDocument(
+        html,
+        hydrationData,
+        options?.document,
+        routeMetaResolved,
+        perRequestNonce ?? undefined,
       );
+
+      let response = HttpServerResponse.html(document);
+      if (options?.csp?.policy && perRequestNonce !== null) {
+        const policyStr =
+          typeof options.csp.policy === "function"
+            ? options.csp.policy(perRequestNonce)
+            : options.csp.policy;
+        const headerName = options.csp.reportOnly
+          ? "content-security-policy-report-only"
+          : "content-security-policy";
+        response = HttpServerResponse.setHeader(
+          response,
+          headerName,
+          policyStr,
+        );
+      }
+      return response;
     });
 
     // Register GET handler with error logging

@@ -37,10 +37,24 @@ import {
 
 import { ClientAsyncCacheLayer } from "../../ClientAsyncCache.js";
 import { ClientControlCtx } from "../../Control/ClientControlCtx.js";
+import { CspNonce } from "../../CspNonce.js";
 import * as Element from "../../Element/index.js";
 import { ClientSuspenseBoundaryCtx } from "../../SuspenseBoundaryCtx/ClientSuspenseBoundaryCtx.js";
 import { makeIdGeneratorLayer } from "../../UniqueId.js";
 import { DOMRenderer } from "../DOMRenderer.js";
+
+/**
+ * Read the per-request CSP nonce the server embedded as
+ * `<meta property="csp-nonce" nonce="…">`. Returns `null` when the
+ * meta is absent (the overwhelmingly common case for a client-only
+ * `mount` call — no CSP configured), so the layer can be built empty
+ * and `CspNonce` never shows up in anyone's `R`.
+ */
+const readMetaNonce = (): string | null => {
+  if (typeof document === "undefined") return null;
+  const meta = document.querySelector('meta[property="csp-nonce"]');
+  return meta?.getAttribute("nonce") ?? null;
+};
 
 /**
  * Provides the client-side rendering layers (Renderer, ControlCtx,
@@ -72,11 +86,22 @@ export const _mountScoped = (
       ClientSuspenseBoundaryCtx,
       rendererLayer,
     );
+    // Pick up a CSP nonce from the embedded meta tag, if present.
+    // Absent → identity (no CspNonce layer), so consumers'
+    // `Effect.serviceOption(CspNonce)` returns `None` and nothing
+    // gets stamped. Keeps CspNonce off the required-R channel for
+    // every non-CSP app.
+    const metaNonce = readMetaNonce();
+    const cspNonceLayer =
+      metaNonce !== null
+        ? Layer.succeed(CspNonce, { nonce: metaNonce })
+        : Layer.empty;
     const el = yield* element.pipe(
       Effect.provide(rendererLayer),
       Effect.provide(ClientControlCtx),
       Effect.provide(suspenseLayer),
       Effect.provide(ClientAsyncCacheLayer),
+      Effect.provide(cspNonceLayer),
       // Per-app `IdGenerator` so `UniqueId.make` ids restart at zero
       // for each `mount` call. In an SPA this is per page-load; in an
       // SSR app the matching reset happens inside `hydrate`.

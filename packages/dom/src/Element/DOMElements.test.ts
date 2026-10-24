@@ -1,10 +1,11 @@
 import { describe, it } from "@effect/vitest";
-import { Effect } from "effect";
+import { Effect, Layer } from "effect";
 import { beforeEach, expect, vi } from "vitest";
 
 import { Signal } from "@stax-ui/core";
 
 import { collect } from "../Collect.js";
+import { CspNonce } from "../CspNonce.js";
 import { DOMRendererLive } from "../Render/DOMRenderer.js";
 import {
   $,
@@ -818,6 +819,49 @@ describe("DOMElements", () => {
           expect(on.getAttribute("disabled")).toBe(""); // present, empty
           expect(off.hasAttribute("disabled")).toBe(false); // absent
         }).pipe(Effect.provide(TestLayer)),
+    );
+  });
+
+  describe("CSP nonce (enableCspNonce)", () => {
+    const withNonce = (nonce: string) =>
+      Layer.merge(TestLayer, Layer.succeed(CspNonce, { nonce }));
+
+    it.scopedLive("stamps $.script with ambient CspNonce", () =>
+      Effect.gen(function* () {
+        const el = yield* $.script({ src: "/app.js" });
+        expect(el.getAttribute("nonce")).toBe("r4nd0m");
+      }).pipe(Effect.provide(withNonce("r4nd0m"))),
+    );
+
+    it.scopedLive("stamps $.style with ambient CspNonce", () =>
+      Effect.gen(function* () {
+        const el = yield* $.style({}, ".x{color:red}");
+        expect(el.getAttribute("nonce")).toBe("r4nd0m");
+      }).pipe(Effect.provide(withNonce("r4nd0m"))),
+    );
+
+    it.scopedLive("leaves other elements alone", () =>
+      Effect.gen(function* () {
+        // Divergence is at $.script / $.style only — $.div et al. stay
+        // stock. This guards against enableCspNonce accidentally leaking
+        // into makeElementFactory itself.
+        const el = yield* $.div({ class: "foo" });
+        expect(el.hasAttribute("nonce")).toBe(false);
+      }).pipe(Effect.provide(withNonce("r4nd0m"))),
+    );
+
+    it.scopedLive("explicit `nonce` prop beats the ambient one", () =>
+      Effect.gen(function* () {
+        const el = yield* $.script({ src: "/app.js", nonce: "user-supplied" });
+        expect(el.getAttribute("nonce")).toBe("user-supplied");
+      }).pipe(Effect.provide(withNonce("ambient"))),
+    );
+
+    it.scopedLive("no CspNonce in scope → no nonce attribute stamped", () =>
+      Effect.gen(function* () {
+        const el = yield* $.script({ src: "/app.js" });
+        expect(el.hasAttribute("nonce")).toBe(false);
+      }).pipe(Effect.provide(TestLayer)),
     );
   });
 });

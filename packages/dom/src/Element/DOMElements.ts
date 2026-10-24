@@ -8,6 +8,7 @@ import { isEffect } from "effect/Effect";
 
 import { MergePropsCtx, Readable, RendererContext } from "@stax-ui/core";
 
+import { CspNonce } from "../CspNonce.js";
 import * as Core from "./core.js";
 import type { ElementRef } from "./ref.js";
 import type { Child, ChildInput, ChildNode, Element } from "./types.js";
@@ -951,10 +952,57 @@ export const menu = makeElementFactory("menu");
 export const template = makeElementFactory("template");
 export const slot = makeElementFactory("slot");
 
+/**
+ * Pipeable modifier that adds CSP nonce stamping to an element factory.
+ * Applied at the factory *definition* site so the divergence from the
+ * stock behavior is visible there, rather than hidden inside
+ * `makeElementFactory` which stays uniform for every tag.
+ *
+ * The wrapped factory reads `CspNonce` via `Effect.serviceOption` on
+ * each render — strictly optional, so the nonce never ends up in any
+ * caller's `R`. When present AND the caller didn't pass an explicit
+ * `nonce` attribute, the nonce is injected into the attribute set
+ * before the stock factory runs. The stock `setAttribute` path takes
+ * it from there (SSR writes the attribute into the vnode, the DOM
+ * renderer calls `setAttribute` on the element pre-insertion, which
+ * sets the `.nonce` property the browser checks against the policy).
+ *
+ * Explicit user nonce always wins — covers the rare case of embedding
+ * a third-party script tag with its own policy-matching nonce.
+ */
+const enableCspNonce = <K extends keyof HTMLElementTagNameMap>(
+  factory: ElementFactory<K>,
+): ElementFactory<K> => {
+  type Attrs = HTMLAttributes<HTMLElementTagNameMap[K]> & {
+    readonly nonce?: string;
+  };
+  return (<E = never, R = never>(...args: unknown[]) =>
+    Effect.gen(function* () {
+      const nonceOpt = yield* Effect.serviceOption(CspNonce);
+      const { attrs, children } = splitArgs<Attrs>(args);
+      const effectiveAttrs: Attrs | undefined =
+        Option.isSome(nonceOpt) && !attrs?.nonce
+          ? ({ ...(attrs ?? {}), nonce: nonceOpt.value.nonce } as Attrs)
+          : attrs;
+      // Call back into the stock factory with the (possibly stamped)
+      // attrs. The explicit-attrs-plus-children arity is the one the
+      // stock factory also handles via its own `splitArgs`.
+      const inner = factory(
+        effectiveAttrs as Attrs & object,
+        ...(children as ChildInput<E, R>[]),
+      );
+      return yield* inner;
+    })) as unknown as ElementFactory<K>;
+};
+
 // Scripting
 export const noscript = makeElementFactory("noscript");
-export const script = makeElementFactory("script");
-export const style = makeElementFactory("style");
+// `$.script` and `$.style` get `enableCspNonce` because inline / inserted
+// script and style elements are what `script-src` / `style-src` nonce
+// policies gate. Every other factory stays stock — see `enableCspNonce`
+// above for the divergence rationale.
+export const script = enableCspNonce(makeElementFactory("script"));
+export const style = enableCspNonce(makeElementFactory("style"));
 
 // =============================================================================
 // SVG Element Exports

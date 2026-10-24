@@ -27,11 +27,29 @@ import {
   HydrationControlCtx,
   HydrationRootCtx,
 } from "../../Control/HydrationControlCtx.js";
+import { CspNonce } from "../../CspNonce.js";
 import * as Element from "../../Element/index.js";
 import { HydrationSuspenseBoundaryCtx } from "../../SuspenseBoundaryCtx/HydrationSuspenseBoundaryCtx.js";
 import { makeIdGeneratorLayer } from "../../UniqueId.js";
 import { makeHydrationContext } from "./HydrationContext.js";
 import { createHydrationRenderer } from "./HydrationRenderer.js";
+
+/**
+ * Read the per-request CSP nonce the server embedded as
+ * `<meta property="csp-nonce" nonce="…">`. Returns `null` when the
+ * meta is absent (the overwhelmingly common case — no CSP configured),
+ * so the layer can be built as empty and `CspNonce` just never shows
+ * up in anyone's `R`.
+ *
+ * Browsers only "hide" the nonce attribute on CSP-governed elements
+ * (script, style, link), not on meta — `getAttribute("nonce")` returns
+ * the real value, no polyfill needed.
+ */
+const readMetaNonce = (): string | null => {
+  if (typeof document === "undefined") return null;
+  const meta = document.querySelector('meta[property="csp-nonce"]');
+  return meta?.getAttribute("nonce") ?? null;
+};
 
 export interface HydrateOptions<
   L extends Layer.Layer<never, never, never> = Layer.Layer<never, never, never>,
@@ -133,6 +151,18 @@ export function hydrate<
     // this, SSR-generated ARIA references break after hydration
     // (see #173).
     elementLayers = Layer.merge(elementLayers, makeIdGeneratorLayer());
+    // Pick up the CSP nonce the server embedded, if any. Absent → no
+    // layer added → consumers' `Effect.serviceOption(CspNonce)` returns
+    // `None` → stock behavior (no nonce stamping). This matches the
+    // "every consumer uses serviceOption" rule — CspNonce never shows
+    // up in anyone's required `R`.
+    const metaNonce = readMetaNonce();
+    if (metaNonce !== null) {
+      elementLayers = Layer.merge(
+        elementLayers,
+        Layer.succeed(CspNonce, { nonce: metaNonce }),
+      );
+    }
     if (opts.layers) {
       elementLayers = Layer.merge(
         elementLayers,
