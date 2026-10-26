@@ -1,12 +1,14 @@
 ---
-title: "State Machines"
+title: "Basic State Machines"
 description: "Declarative state machines with type-safe transitions and reactive guards using Transition."
 order: 3
 ---
 
-# State Machines
+# Basic State Machines
 
 Complex UI often has states that should only transition in specific ways — a form that can't submit while already loading, a modal that must close before another opens, a wizard that can't skip steps. `Transition` makes these constraints explicit and enforced at both the type level and runtime.
+
+For richer orchestration — per-state scopes, typed event payloads, service and factory patterns — reach for `@stax-ui/machine`. The [Machine](/docs/08-machine/00-introduction) section covers it. `Transition` is the lightweight primitive for small, state-only guards.
 
 ## Defining a State Machine
 
