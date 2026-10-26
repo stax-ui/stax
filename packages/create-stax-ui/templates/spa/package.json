@@ -9,8 +9,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@stax-ui/dom": "^0.11.0",
-    "@stax-ui/router": "^0.6.0",
+    "@stax-ui/dom": "^0.11.1",
+    "@stax-ui/router": "^0.6.1",
     "effect": "^3.19.13"
   },
   "devDependencies": {
