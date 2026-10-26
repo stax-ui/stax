@@ -39,6 +39,8 @@ export { DOMRenderer, DOMRendererLive } from "./Render/DOMRenderer.js";
 // Re-export commonly used items from Element for convenience
 export { $, bindElementToRef, ref } from "./Element/index.js";
 export type {
+  AttributeValue,
+  BaseElementAttributes,
   ChildInput,
   ChildInputE,
   ChildInputR,
@@ -46,8 +48,14 @@ export type {
   Children,
   ClassItem,
   ClassValue,
+  ElementFactory,
+  EventAttributes,
   EventHandler,
+  HTMLAttributes,
   PermissiveChildren,
+  StyleValue,
+  SVGAttributes,
+  SVGElementFactory,
 } from "./Element/index.js";
 
 // Control flow

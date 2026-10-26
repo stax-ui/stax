@@ -80,6 +80,56 @@ describe("Element.bindVisible", () => {
       expect(result).toBe("until-found");
     });
 
+    it("skips inline display by default when hiddenValue is 'until-found'", async () => {
+      // Browsers only reveal `hidden="until-found"` content through
+      // find-in-page when it is NOT `display: none` — the mechanism
+      // uses `content-visibility: hidden`. The default must leave
+      // display alone for the attribute to work.
+      const result = await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const open = yield* Signal.make(false);
+            const el = yield* $.div({}, "hello").pipe(
+              bindVisible(open, { hiddenValue: "until-found" }),
+            );
+            return {
+              hidden: el.getAttribute("hidden"),
+              display: el.style.getPropertyValue("display"),
+            };
+          }).pipe(Effect.provide(DOMRendererLive)),
+        ),
+      );
+      expect(result.hidden).toBe("until-found");
+      expect(result.display).toBe("");
+    });
+
+    it("still applies inline display when manageDisplay is explicitly true with 'until-found'", async () => {
+      // Opt-in override: the caller gets the inline rule and loses
+      // find-in-page reveal, but the default-off behaviour above is
+      // not a hard block.
+      const result = await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const open = yield* Signal.make(false);
+            const el = yield* $.div({}, "hello").pipe(
+              bindVisible(open, {
+                hiddenValue: "until-found",
+                manageDisplay: true,
+              }),
+            );
+            return {
+              hidden: el.getAttribute("hidden"),
+              display: el.style.getPropertyValue("display"),
+              priority: el.style.getPropertyPriority("display"),
+            };
+          }).pipe(Effect.provide(DOMRendererLive)),
+        ),
+      );
+      expect(result.hidden).toBe("until-found");
+      expect(result.display).toBe("none");
+      expect(result.priority).toBe("important");
+    });
+
     it("skips inline display when manageDisplay is false", async () => {
       const result = await Effect.runPromise(
         Effect.scoped(
@@ -145,6 +195,9 @@ describe("Element.bindVisible", () => {
         ),
       );
       expect(html).toContain('hidden="until-found"');
+      // Default-off: SSR output for `until-found` must not carry
+      // `display: none`, or find-in-page won't reach the content.
+      expect(html).not.toContain("display: none");
     });
   });
 
