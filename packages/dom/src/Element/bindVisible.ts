@@ -61,15 +61,25 @@ export interface BindVisibleOptions {
    */
   readonly intro?: boolean;
   /**
-   * When `true` (default), `bindVisible` sets an inline
-   * `display: none !important` alongside the `hidden` attribute while
-   * hidden, and clears it on show. This beats Tailwind's `display:
-   * block` / `flex` utilities (which otherwise override the UA's
-   * `[hidden] { display: none }` rule and leave the element visible).
-   * Set to `false` when you want to control `display` entirely from
-   * your own CSS — e.g. `[hidden] { display: none !important }` as a
-   * global, or a layout that uses `visibility: hidden` to preserve
-   * geometry.
+   * Set an inline `display: none !important` alongside the `hidden`
+   * attribute while hidden, and clear it on show. This beats
+   * Tailwind's `display: block` / `flex` utilities (which otherwise
+   * override the UA's `[hidden] { display: none }` rule and leave the
+   * element visible).
+   *
+   * **Default:** `true`, except when `hiddenValue` is `"until-found"`,
+   * where it defaults to `false`. The browser's find-in-page can only
+   * reveal `hidden="until-found"` content when it is **not**
+   * `display: none` (the mechanism relies on `content-visibility:
+   * hidden`), so applying the inline `display: none` would silently
+   * defeat the attribute. If you set `manageDisplay: true` with
+   * `"until-found"` explicitly, you get the inline rule and lose
+   * find-in-page reveal — only do that when you want it.
+   *
+   * Set to `false` otherwise when you want to control `display`
+   * entirely from your own CSS — e.g. `[hidden] { display: none
+   * !important }` as a global, or a layout that uses `visibility:
+   * hidden` to preserve geometry.
    */
   readonly manageDisplay?: boolean;
 }
@@ -182,7 +192,11 @@ export const bindVisible =
       const el = yield* self;
       const renderer = yield* RendererContext;
       const hiddenValue: HiddenValue = options.hiddenValue ?? "";
-      const manageDisplay = options.manageDisplay ?? true;
+      // Default-off for `until-found`: the inline `display: none`
+      // would hide the content from find-in-page, defeating the
+      // attribute. See the `manageDisplay` docstring.
+      const manageDisplay =
+        options.manageDisplay ?? hiddenValue !== "until-found";
       const animate = options.animate;
 
       const initial = yield* visible.get;
