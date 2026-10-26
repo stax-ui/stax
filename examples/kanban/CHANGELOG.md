@@ -1,5 +1,12 @@
 # kanban
 
+## 0.0.14
+
+### Patch Changes
+
+- Updated dependencies [4a0a080]
+  - @stax-ui/dom@0.11.1
+
 ## 0.0.13
 
 ### Patch Changes
