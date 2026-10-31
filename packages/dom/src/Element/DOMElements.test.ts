@@ -17,11 +17,13 @@ import {
   h1,
   img,
   input,
+  isAttrsObject,
   li,
   MergePropsCtx,
   of,
   p,
   span,
+  splitArgs,
   svg,
   ul,
 } from "./DOMElements.js";
@@ -531,6 +533,91 @@ describe("DOMElements", () => {
         expect(el.textContent).toBe("");
       }).pipe(Effect.provide(TestLayer)),
     );
+  });
+
+  // Exported helpers for component authors who want the same `(attrs?,
+  // ...children)` / `(attrs?, children[])` call shapes as the `$`
+  // factories. If these drift from the factory's own disambiguation,
+  // user components and `$.*` would read the same call differently.
+  describe("isAttrsObject", () => {
+    it("returns true for a plain object", () => {
+      expect(isAttrsObject({})).toBe(true);
+      expect(isAttrsObject({ id: "x" })).toBe(true);
+    });
+
+    it("returns false for nullish and primitives", () => {
+      expect(isAttrsObject(null)).toBe(false);
+      expect(isAttrsObject(undefined)).toBe(false);
+      expect(isAttrsObject("string")).toBe(false);
+      expect(isAttrsObject(42)).toBe(false);
+      expect(isAttrsObject(true)).toBe(false);
+      expect(isAttrsObject(false)).toBe(false);
+    });
+
+    it("returns false for arrays", () => {
+      expect(isAttrsObject([])).toBe(false);
+      expect(isAttrsObject(["a", "b"])).toBe(false);
+    });
+
+    it("returns false for Effects", () => {
+      expect(isAttrsObject(Effect.succeed("x"))).toBe(false);
+    });
+
+    it.scopedLive("returns false for Readables", () =>
+      Effect.gen(function* () {
+        const s = yield* Signal.make("v");
+        expect(isAttrsObject(s)).toBe(false);
+      }).pipe(Effect.provide(TestLayer)),
+    );
+
+    it("returns false for DOM nodes", () => {
+      expect(isAttrsObject(document.createElement("div"))).toBe(false);
+      expect(isAttrsObject(document.createTextNode("t"))).toBe(false);
+    });
+  });
+
+  describe("splitArgs", () => {
+    it("extracts attrs from the first arg when it is a plain object", () => {
+      const result = splitArgs<{ id: string }>([
+        { id: "x" },
+        "child-1",
+        "child-2",
+      ]);
+      expect(result.attrs).toEqual({ id: "x" });
+      expect(result.children).toEqual(["child-1", "child-2"]);
+    });
+
+    it("returns attrs: undefined when the first arg is not an attrs object", () => {
+      const result = splitArgs<{ id: string }>(["child-1", "child-2"]);
+      expect(result.attrs).toBeUndefined();
+      expect(result.children).toEqual(["child-1", "child-2"]);
+    });
+
+    it("returns attrs: undefined for an empty argument list", () => {
+      const result = splitArgs<{ id: string }>([]);
+      expect(result.attrs).toBeUndefined();
+      expect(result.children).toEqual([]);
+    });
+
+    it("preserves an empty attrs object (distinguishable from no attrs)", () => {
+      const result = splitArgs<Record<string, unknown>>([{}, "child"]);
+      expect(result.attrs).toEqual({});
+      expect(result.attrs).not.toBeUndefined();
+      expect(result.children).toEqual(["child"]);
+    });
+
+    it("treats a leading array as children, not attrs", () => {
+      const result = splitArgs<{ id: string }>([["a", "b"]]);
+      expect(result.attrs).toBeUndefined();
+      expect(result.children).toEqual([["a", "b"]]);
+    });
+
+    it("treats a leading Effect as a child, not attrs", () => {
+      const eff = Effect.succeed("x");
+      const result = splitArgs<{ id: string }>([eff, "tail"]);
+      expect(result.attrs).toBeUndefined();
+      expect(result.children).toEqual([eff, "tail"]);
+    });
   });
 
   // Regression tests for the variadic-children API (issue #56). These guard
