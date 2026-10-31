@@ -43,4 +43,4 @@ export type {
   PermissiveChildren,
 } from "./types.js";
 
-export { $, MergePropsCtx } from "./DOMElements.js";
+export { $, isAttrsObject, MergePropsCtx, splitArgs } from "./DOMElements.js";

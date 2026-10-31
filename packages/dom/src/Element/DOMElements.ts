@@ -629,15 +629,20 @@ const applyAttributes = <T extends HTMLElement | SVGElement>(
 
 /**
  * Runtime duck-type check: is this argument a plain attrs object (as opposed
- * to a ChildInput)? Attrs are plain objects that aren't Effects, Readables,
- * DOM nodes, or arrays. Anything else (string, number, boolean, null,
- * undefined, Effect, Readable, Node, array) is a ChildInput.
+ * to a {@link ChildInput})? Attrs are plain objects that aren't Effects,
+ * Readables, DOM nodes, or arrays. Anything else (string, number, boolean,
+ * null, undefined, Effect, Readable, Node, array) is a ChildInput.
  *
  * Used by the factory to disambiguate `$.tag(attrs, ...children)` from
  * `$.tag(...children)` at runtime — TypeScript overloads pick statically
  * but the runtime needs to decide which slot arg[0] fills.
+ *
+ * Exported so component authors who want the same `(attrs?, ...children)`
+ * / `(attrs?, children[])` call shapes as the `$` factories can reuse the
+ * exact same disambiguation rule. Matching this rule is the only way a
+ * user component and a `$` factory can read a given call the same way.
  */
-const isAttrsObject = (arg: unknown): boolean => {
+export const isAttrsObject = (arg: unknown): arg is object => {
   if (arg == null) return false;
   if (typeof arg !== "object") return false;
   if (Array.isArray(arg)) return false;
@@ -791,13 +796,35 @@ const createSVGElement = <K extends keyof SVGElementTagNameMap, E, R>(
 /**
  * Split a variadic argument list into `[attrs, children]` at runtime.
  * TypeScript overloads pick statically; this is the runtime counterpart —
- * a duck-type check on `args[0]` decides whether it occupies the attrs slot.
+ * a duck-type check on `args[0]` (via {@link isAttrsObject}) decides
+ * whether it occupies the attrs slot.
+ *
+ * **Returns `attrs: undefined`, not `{}`,** when no attrs were passed, so
+ * a component author can tell "no props" from "empty props" (useful when
+ * deciding whether to apply default props). The `$` factories themselves
+ * default the `undefined` through at their own call site.
+ *
+ * Exported so component authors can split their own variadic arg lists the
+ * same way the `$` factories do, without reproducing the rule. If stax
+ * later adds a new kind of child (another runtime shape that passes
+ * through `ChildInput`), every component using `splitArgs` picks it up.
  */
-const splitArgs = <A>(args: unknown[]): { attrs: A; children: unknown[] } => {
+export const splitArgs = <A>(
+  args: ReadonlyArray<unknown>,
+): {
+  readonly attrs: A | undefined;
+  readonly children: ReadonlyArray<ChildInput<unknown, unknown>>;
+} => {
   if (args.length > 0 && isAttrsObject(args[0])) {
-    return { attrs: args[0] as A, children: args.slice(1) };
+    return {
+      attrs: args[0] as A,
+      children: args.slice(1) as ReadonlyArray<ChildInput<unknown, unknown>>,
+    };
   }
-  return { attrs: {} as A, children: args };
+  return {
+    attrs: undefined,
+    children: args as ReadonlyArray<ChildInput<unknown, unknown>>,
+  };
 };
 
 /**
@@ -812,7 +839,11 @@ const makeElementFactory = <K extends keyof HTMLElementTagNameMap>(
     const normalized = normalizeChildren<E, R>(
       rawChildren as ReadonlyArray<ChildInput<E, R>>,
     );
-    return createElement(tagName, attrs, combineChildren(normalized));
+    return createElement(
+      tagName,
+      attrs ?? ({} as HTMLAttributes<HTMLElementTagNameMap[K]>),
+      combineChildren(normalized),
+    );
   }) as ElementFactory<K>;
 };
 
@@ -828,7 +859,11 @@ const makeSVGElementFactory = <K extends keyof SVGElementTagNameMap>(
     const normalized = normalizeChildren<E, R>(
       rawChildren as ReadonlyArray<ChildInput<E, R>>,
     );
-    return createSVGElement(tagName, attrs, combineChildren(normalized));
+    return createSVGElement(
+      tagName,
+      attrs ?? ({} as SVGAttributes<SVGElementTagNameMap[K]>),
+      combineChildren(normalized),
+    );
   }) as SVGElementFactory<K>;
 };
 
@@ -986,11 +1021,15 @@ const enableCspNonce = <K extends keyof HTMLElementTagNameMap>(
           : attrs;
       // Call back into the stock factory with the (possibly stamped)
       // attrs. The explicit-attrs-plus-children arity is the one the
-      // stock factory also handles via its own `splitArgs`.
-      const inner = factory(
-        effectiveAttrs as Attrs & object,
-        ...(children as ChildInput<E, R>[]),
-      );
+      // stock factory also handles via its own `splitArgs`. Skip the
+      // attrs slot entirely when we have none to pass — otherwise the
+      // stock factory would see a leading `undefined` and process it
+      // as a (skipped) child, which is wasteful.
+      const forwardedChildren = children as ChildInput<E, R>[];
+      const inner =
+        effectiveAttrs !== undefined
+          ? factory(effectiveAttrs as Attrs & object, ...forwardedChildren)
+          : factory(...forwardedChildren);
       return yield* inner;
     })) as unknown as ElementFactory<K>;
 };
