@@ -40,8 +40,9 @@ interface AsyncErrCtx {
 declare const Panel: ComponentFactory<
   { keepMounted?: boolean },
   HTMLDivElement,
-  CollapsibleRootCtx,
-  never
+  never, // Fails
+  CollapsibleRootCtx, // Requires
+  never // Provides
 >;
 
 declare const asyncLeaf: Effect.Effect<HTMLElement, Error, AsyncErrCtx>;

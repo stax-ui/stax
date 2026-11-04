@@ -43,24 +43,30 @@ import type { ChildInput, Element as StaxElement } from "../Element/types.js";
  * The TS2589-at-risk half: variadic form with `Exclude<ChildInputR<...>,
  * Prov>` on the R channel. The forwarding form sits alongside it as the
  * TS2589-safe fallback (one `<E, R>` pair, no recursive-tuple inference).
+ *
+ * `Fails` carries impl's own E channel (if any) unioned with each
+ * child's E, mirroring the way `Requires` unions with children's R.
+ * Defaults to `never`, so a component whose impl can't fail on its own
+ * still reports children's E unchanged.
  */
 export interface WithProps<
   Props,
   A extends HTMLElement | SVGElement | DocumentFragment,
+  Fails,
   Requires,
   Provides,
 > {
   <E = never, R = never>(
     props: Props,
     children: ReadonlyArray<ChildInput<E, R>>,
-  ): StaxElement<A, E, Exclude<R, Provides> | Requires>;
+  ): StaxElement<A, E | Fails, Exclude<R, Provides> | Requires>;
 
   <T extends ReadonlyArray<ChildInput<unknown, unknown>>>(
     props: Props,
     ...children: T
   ): StaxElement<
     A,
-    ChildInputE<T[number]>,
+    ChildInputE<T[number]> | Fails,
     Exclude<ChildInputR<T[number]>, Provides> | Requires
   >;
 }
@@ -68,18 +74,19 @@ export interface WithProps<
 /** The props-less half, mirroring `WithProps` without the first arg. */
 export interface WithoutProps<
   A extends HTMLElement | SVGElement | DocumentFragment,
+  Fails,
   Requires,
   Provides,
 > {
   <E = never, R = never>(
     children: ReadonlyArray<ChildInput<E, R>>,
-  ): StaxElement<A, E, Exclude<R, Provides> | Requires>;
+  ): StaxElement<A, E | Fails, Exclude<R, Provides> | Requires>;
 
   <T extends ReadonlyArray<ChildInput<unknown, unknown>>>(
     ...children: T
   ): StaxElement<
     A,
-    ChildInputE<T[number]>,
+    ChildInputE<T[number]> | Fails,
     Exclude<ChildInputR<T[number]>, Provides> | Requires
   >;
 }
@@ -89,19 +96,25 @@ export interface WithoutProps<
  * only when it holds do the no-props overloads exist. For a component
  * with a required prop the intersection collapses to `WithProps`, and
  * calling it with no first-arg object is a type error.
+ *
+ * Positional order mirrors `Element<A, E, R>`: Props describes the
+ * input, then A / Fails (= E) / Requires (= R) describe the output
+ * directly, with Provides as the R-transformer. `Fails`, `Requires`,
+ * and `Provides` all default to `never`.
  */
 export type ComponentFactory<
   Props,
   A extends HTMLElement | SVGElement | DocumentFragment,
+  Fails = never,
   Requires = never,
   Provides = never,
-> = WithProps<Props, A, Requires, Provides> &
+> = WithProps<Props, A, Fails, Requires, Provides> &
   // `{} extends Props` is the "every prop is optional" check from the
   // proposal. The literal `{}` here is deliberate: it matches the
   // object with no required keys, which is exactly what we want to
   // branch on.
   // eslint-disable-next-line @typescript-eslint/no-empty-object-type
-  ({} extends Props ? WithoutProps<A, Requires, Provides> : unknown);
+  ({} extends Props ? WithoutProps<A, Fails, Requires, Provides> : unknown);
 
 // -----------------------------------------------------------------------------
 // 2. Fake context tags and component declarations
@@ -128,26 +141,29 @@ interface ProgressProps {
   readonly value: number; // required
 }
 
-/** Root — provides CollapsibleRootCtx, no self requirements. */
+/** Root — provides CollapsibleRootCtx, no self failures or requirements. */
 declare const Root: ComponentFactory<
   RootProps,
   HTMLDivElement,
-  never,
-  CollapsibleRootCtx
+  never, // Fails
+  never, // Requires
+  CollapsibleRootCtx // Provides
 >;
 
-/** Panel — requires CollapsibleRootCtx. */
+/** Panel — requires CollapsibleRootCtx, can't fail on its own. */
 declare const Panel: ComponentFactory<
   PanelProps,
   HTMLDivElement,
-  CollapsibleRootCtx,
-  never
+  never, // Fails
+  CollapsibleRootCtx, // Requires
+  never // Provides
 >;
 
 /** Trigger — requires CollapsibleRootCtx. */
 declare const Trigger: ComponentFactory<
   TriggerProps,
   HTMLButtonElement,
+  never,
   CollapsibleRootCtx,
   never
 >;
@@ -156,12 +172,7 @@ declare const Trigger: ComponentFactory<
 declare const Leaf: ComponentFactory<{ label?: string }, HTMLSpanElement>;
 
 /** Progress — required prop; the `{} extends Props` guard disappears. */
-declare const Progress: ComponentFactory<
-  ProgressProps,
-  HTMLDivElement,
-  never,
-  never
->;
+declare const Progress: ComponentFactory<ProgressProps, HTMLDivElement>;
 
 declare const sig: Readable.Readable<string>;
 
