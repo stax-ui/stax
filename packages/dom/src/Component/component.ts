@@ -1,8 +1,7 @@
 import { Context, Effect } from "effect";
 import { isEffect } from "effect/Effect";
 
-import { Readable } from "@stax-ui/core";
-
+import { splitArgs } from "../Element/index.js";
 import type {
   ChildLeaf,
   Children,
@@ -15,49 +14,40 @@ import type { ComponentFactory } from "./types.js";
 // -----------------------------------------------------------------------------
 
 /**
- * Duck-type check mirroring `isAttrsObject` in `Element/DOMElements.ts`.
- * Decides whether `args[0]` fills the attrs slot or is the first child.
+ * Unwrap the single-array forwarding form into a flat children list.
+ *
+ * `Element.splitArgs` returns `children` unchanged, but a component's
+ * impl receives children as a flat `ReadonlyArray`. `splitArgs` plus
+ * this unwrap step match the behavior of the `$` factories' child
+ * normalization (which flattens one level of nesting inside
+ * `normalizeChildren`) without pulling impl through normalization.
  */
-const isPropsObject = (arg: unknown): boolean => {
-  if (arg == null) return false;
-  if (typeof arg !== "object") return false;
-  if (Array.isArray(arg)) return false;
-  if (isEffect(arg)) return false;
-  if (Readable.isReadable(arg)) return false;
-  if (typeof Node !== "undefined" && arg instanceof Node) return false;
-  return true;
-};
-
-/**
- * Split variadic args into `[props, children]`. Mirrors `splitArgs` in
- * `Element/DOMElements.ts`. Unwraps the single-array forwarding form
- * so impl sees a flat children array in both call shapes.
- */
-const splitArgs = (
-  args: ReadonlyArray<unknown>,
-): { props: Record<string, unknown>; children: ReadonlyArray<unknown> } => {
-  const hasProps = args.length > 0 && isPropsObject(args[0]);
-  const props = hasProps ? (args[0] as Record<string, unknown>) : {};
-  const rest = hasProps ? args.slice(1) : args;
-  const children =
-    rest.length === 1 && Array.isArray(rest[0])
-      ? (rest[0] as ReadonlyArray<unknown>)
-      : rest;
-  return { props, children };
-};
+const flattenForwarded = (
+  children: ReadonlyArray<unknown>,
+): ReadonlyArray<unknown> =>
+  children.length === 1 && Array.isArray(children[0])
+    ? (children[0] as ReadonlyArray<unknown>)
+    : children;
 
 // -----------------------------------------------------------------------------
-// Impl signature types (not part of the public API — they describe the
-// shape component authors hand to `component()` / `component.provides()`)
+// Impl signature types
 // -----------------------------------------------------------------------------
 
 /**
- * The pure-path impl shape. Impl's `children` parameter is typed
- * `Children<never, never>` deliberately — the "additive-identity"
- * trick that lets TypeScript infer impl's own E and R (as `Fails` and
- * `Requires`) without them tangling with children's E and R, which
- * are re-attached by the {@link ComponentFactory} overload at the
- * call site.
+ * The function signature a component author hands to {@link component}.
+ *
+ * `children` is deliberately typed `Children<never, never>` — the
+ * "additive-identity" trick that lets TypeScript infer impl's own `E`
+ * and `R` without them tangling with children's `E` and `R`, which are
+ * re-attached by the {@link ComponentFactory} overload at the call site.
+ *
+ * @example
+ * ```ts
+ * const Panel = component(
+ *   (props: { tone?: "soft" | "loud" }, children) =>
+ *     $.div({ class: `panel panel--${props.tone ?? "soft"}` }, children),
+ * );
+ * ```
  */
 export type ComponentImpl<
   Props,
@@ -69,13 +59,25 @@ export type ComponentImpl<
   children: Children<never, never>,
 ) => StaxElement<A, SelfE, SelfR>;
 
-/** Shape of the `provide` closure handed to a single-tag provider impl. */
+/**
+ * The `provide` closure handed to a single-tag provider impl.
+ *
+ * Call it with the service value to scope impl's closed-over children
+ * under that Tag. Pass an explicit `children` second argument to scope
+ * a different subset instead — the escape hatch for routing only part
+ * of `children` through the provider.
+ */
 export type ProvideOne<T extends Context.Tag<unknown, unknown>> = (
   service: Context.Tag.Service<T>,
   children?: Children<never, never>,
 ) => Children<never, never>;
 
-/** Shape of the `provide` closure handed to a record-form provider impl. */
+/**
+ * The `provide` closure handed to a multi-tag provider impl.
+ *
+ * `services` keys match the label record passed to
+ * `component.provides({...})`. Values are the service instances to bind.
+ */
 export type ProvideMany<
   Tags extends Record<string, Context.Tag<unknown, unknown>>,
 > = (
@@ -83,6 +85,12 @@ export type ProvideMany<
   children?: Children<never, never>,
 ) => Children<never, never>;
 
+/**
+ * The function signature handed to `component.provides(Tag)(…)`.
+ * Impl receives `(props, provide, children?)` — `children` is optional
+ * because most providers only route through `provide(service)` and
+ * never read the raw children directly.
+ */
 export type ProviderImplOne<
   T extends Context.Tag<unknown, unknown>,
   Props,
@@ -95,6 +103,7 @@ export type ProviderImplOne<
   children?: Children<never, never>,
 ) => StaxElement<A, SelfE, SelfR>;
 
+/** Multi-tag counterpart to {@link ProviderImplOne}. */
 export type ProviderImplMany<
   Tags extends Record<string, Context.Tag<unknown, unknown>>,
   Props,
@@ -108,24 +117,25 @@ export type ProviderImplMany<
 ) => StaxElement<A, SelfE, SelfR>;
 
 // -----------------------------------------------------------------------------
-// Runtime: wrap-each-child-with-provideService
+// Runtime: provide a Context into each effectful child
 // -----------------------------------------------------------------------------
 
 /**
- * Apply `Effect.provideService` to each effectful child. Non-effectful
+ * Apply `Effect.provide(context)` to each effectful child. Non-effectful
  * leaves (strings, numbers, booleans, null, undefined, Readables) pass
  * through unchanged — they don't carry an R channel to provide into.
  *
- * Returning the same array shape keeps impl's "children" opaque: impl
- * doesn't have to know which entries got wrapped.
+ * A single Context carries every service the provider binds, so the
+ * multi-tag case walks each child once no matter how many tags are in
+ * the record (vs. once per `(child, tag)` pair if we looped
+ * `provideService`).
  */
-const provideToChildren = <I, S>(
+const provideContextToChildren = <R>(
   children: ReadonlyArray<unknown>,
-  tag: Context.Tag<I, S>,
-  service: S,
+  context: Context.Context<R>,
 ): ReadonlyArray<unknown> =>
   children.map((child) =>
-    isEffect(child) ? Effect.provideService(child, tag, service) : child,
+    isEffect(child) ? Effect.provide(child, context) : child,
   );
 
 // -----------------------------------------------------------------------------
@@ -133,19 +143,62 @@ const provideToChildren = <I, S>(
 // -----------------------------------------------------------------------------
 
 /**
- * Wrap an impl function as a {@link ComponentFactory}. The returned
- * factory accepts the user-facing variadic / forwarding overloads;
- * impl itself receives `(props, children)` with `children` typed as
- * the opaque `Children<never, never>` — see {@link ComponentImpl}.
+ * Wrap an impl function as a reusable component factory.
+ *
+ * The returned factory accepts the same `(attrs?, ...children)` and
+ * `(attrs?, children[])` call shapes as the `$.div` / `$.span` factories,
+ * and threads each child's `E` and `R` into the output element — so a
+ * component's requirements union naturally with its children's at the
+ * call site, and a parent that provides a service cancels it out via
+ * `Exclude` on the R channel.
+ *
+ * Impl itself receives `(props, children)`. `children` is typed as the
+ * opaque `Children<never, never>` so impl can pass them through (to
+ * `$.div({}, children)`) without having to re-declare children's `E`
+ * and `R` as generics on impl — see {@link ComponentImpl}.
+ *
+ * When every prop is optional, three call shapes are allowed:
  *
  * ```ts
- * const Panel = component((props: PanelProps, children) =>
- *   $.div({ class: "panel" }, children),
+ * const Leaf = component(
+ *   (props: { label?: string }, children) => $.span({}, children),
  * );
  *
- * Panel({}, "text");
- * Panel("just children");       // when PanelProps is all-optional
+ * Leaf();                       // no args
+ * Leaf("hello");                // children-only
+ * Leaf({ label: "x" }, "hi");   // attrs + variadic children
  * ```
+ *
+ * When at least one prop is required, the no-args / children-only
+ * overloads disappear and the factory demands a props object:
+ *
+ * ```ts
+ * const Progress = component(
+ *   (props: { value: number }, children) =>
+ *     $.div({ "data-value": String(props.value) }, children),
+ * );
+ *
+ * Progress({ value: 10 });
+ * Progress({ value: 10 }, "label");
+ * ```
+ *
+ * Impl can read Effect services with `yield*`; those services surface on
+ * the factory's `R` channel so a caller gets a type error if they
+ * aren't provided above:
+ *
+ * ```ts
+ * const Panel = component((_props: {}, children) =>
+ *   Effect.gen(function* () {
+ *     const { color } = yield* ThemeCtx;
+ *     return yield* $.div({ "data-color": color }, children);
+ *   }),
+ * );
+ *
+ * // RequirementsOf<typeof Panel({})> includes ThemeCtx
+ * ```
+ *
+ * Use {@link component.provides} to build a component that **supplies**
+ * a service to its children instead of reading one.
  */
 export function component<
   Props,
@@ -156,20 +209,56 @@ export function component<
   impl: ComponentImpl<Props, A, SelfE, SelfR>,
 ): ComponentFactory<Props, A, SelfE, SelfR, never> {
   const factory = (...args: ReadonlyArray<unknown>): unknown => {
-    const { props, children } = splitArgs(args);
+    const { attrs, children } = splitArgs<Props>(args);
     return impl(
-      props as Props,
-      children as ReadonlyArray<ChildLeaf<never, never>>,
+      attrs ?? ({} as Props),
+      flattenForwarded(children) as ReadonlyArray<ChildLeaf<never, never>>,
     );
   };
   return factory as ComponentFactory<Props, A, SelfE, SelfR, never>;
 }
 
 /**
- * Overload: single-tag provider. Impl receives a `provide(service,
- * children?)` closure that wraps impl's closed-over children with
- * `Effect.provideService` for the tag. Pass an explicit `children`
- * second arg to scope a different subset instead.
+ * Build a component that **provides** a single service to its children.
+ *
+ * Impl receives a `provide(service, children?)` closure that wraps its
+ * closed-over children with the Tag's service, so children (and their
+ * descendants) can `yield*` it without the caller supplying it.
+ *
+ * ```ts
+ * class ThemeCtx extends Context.Tag("ThemeCtx")<
+ *   ThemeCtx,
+ *   { readonly color: string }
+ * >() {}
+ *
+ * const Root = component.provides(ThemeCtx)(
+ *   (props: { color: string }, provide) =>
+ *     $.div({ class: "root" }, provide({ color: props.color })),
+ * );
+ *
+ * const Panel = component((_props: {}, children) =>
+ *   Effect.gen(function* () {
+ *     const { color } = yield* ThemeCtx;
+ *     return yield* $.span({ "data-color": color }, children);
+ *   }),
+ * );
+ *
+ * // RequirementsOf includes no ThemeCtx — Root cancelled it.
+ * const ui = Root({ color: "teal" }, Panel({}, "hi"));
+ * ```
+ *
+ * To scope only part of `children` under the service, declare the
+ * optional third parameter and hand the chosen subset to `provide`:
+ *
+ * ```ts
+ * const SplitRoot = component.provides(ThemeCtx)(
+ *   (_props: {}, provide, children = []) =>
+ *     $.div({},
+ *       children.slice(0, 1),                   // raw
+ *       provide({ color: "lime" }, children.slice(1)), // scoped
+ *     ),
+ * );
+ * ```
  */
 export function provides<T extends Context.Tag<any, any>>(
   tag: T,
@@ -178,9 +267,30 @@ export function provides<T extends Context.Tag<any, any>>(
 ) => ComponentFactory<Props, A, SelfE, SelfR, Context.Tag.Identifier<T>>;
 
 /**
- * Overload: multi-tag provider via a record of author-chosen labels
- * mapping to Tags. Impl's `provide` closure takes a matching record
- * of services.
+ * Build a component that **provides** multiple services to its children,
+ * via a record of author-chosen labels mapping to Tags.
+ *
+ * The labels are impl-local — they shape the `services` record `provide`
+ * expects, nothing more. The output type unions every Tag's Identifier
+ * into the `Provides` slot, so each one cancels against children's R.
+ *
+ * ```ts
+ * const MultiRoot = component.provides({
+ *   theme: ThemeCtx,
+ *   size: SizeCtx,
+ * })((_props: {}, provide) =>
+ *   $.div({},
+ *     provide({
+ *       theme: { color: "cyan" },
+ *       size: { scale: 2 },
+ *     }),
+ *   ),
+ * );
+ * ```
+ *
+ * At runtime the services are gathered into a single `Context` once per
+ * call and `Effect.provide`d into each effectful child, so N tags × M
+ * children is still one `provide` per child, not N × M wraps.
  */
 export function provides<Tags extends Record<string, Context.Tag<any, any>>>(
   tags: Tags,
@@ -200,13 +310,15 @@ export function provides(
   const isSingle = Context.isTag(tagOrTags);
   return (impl) => {
     const factory = (...args: ReadonlyArray<unknown>): unknown => {
-      const { props, children } = splitArgs(args);
+      const { attrs, children: raw } = splitArgs<Record<string, unknown>>(args);
+      const props = attrs ?? {};
+      const children = flattenForwarded(raw);
+
       const provideFn = isSingle
         ? (service: unknown, override?: ReadonlyArray<unknown>) =>
-            provideToChildren(
+            provideContextToChildren(
               override ?? children,
-              tagOrTags as Context.Tag<unknown, unknown>,
-              service,
+              Context.make(tagOrTags as Context.Tag<unknown, unknown>, service),
             )
         : (
             services: Record<string, unknown>,
@@ -216,18 +328,19 @@ export function provides(
               string,
               Context.Tag<unknown, unknown>
             >;
-            let current: ReadonlyArray<unknown> = override ?? children;
-            for (const key of Object.keys(tags)) {
-              current = provideToChildren(current, tags[key]!, services[key]);
-            }
-            return current;
+            const context = Object.keys(tags).reduce(
+              (ctx, key) => Context.add(ctx, tags[key]!, services[key]),
+              Context.empty() as Context.Context<any>,
+            );
+            return provideContextToChildren(override ?? children, context);
           };
+
       return impl(props, provideFn, children);
     };
     return factory;
   };
 }
 
-// Attach `.provides` to `component` so the public surface is the
-// single `component` function with a namespaced helper.
+// Attach `.provides` to `component` so the public surface is the single
+// `component` function with a namespaced helper.
 component.provides = provides;
