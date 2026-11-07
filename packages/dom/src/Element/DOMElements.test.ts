@@ -6,6 +6,7 @@ import { Signal } from "@stax-ui/core";
 
 import { collect } from "../Collect.js";
 import { CspNonce } from "../CspNonce.js";
+import { isAttrsObject, splitArgs } from "../helpers/splitArgs.js";
 import { DOMRendererLive } from "../Render/DOMRenderer.js";
 import {
   $,
@@ -17,13 +18,11 @@ import {
   h1,
   img,
   input,
-  isAttrsObject,
   li,
   MergePropsCtx,
   of,
   p,
   span,
-  splitArgs,
   svg,
   ul,
 } from "./DOMElements.js";

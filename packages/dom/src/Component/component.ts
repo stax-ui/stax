@@ -1,12 +1,12 @@
 import { Context, Effect } from "effect";
 import { isEffect } from "effect/Effect";
 
-import { splitArgs } from "../Element/index.js";
 import type {
   ChildLeaf,
   Children,
   Element as StaxElement,
 } from "../Element/types.js";
+import { splitArgs } from "../helpers/splitArgs.js";
 import type { ComponentFactory } from "./types.js";
 
 // -----------------------------------------------------------------------------
@@ -187,14 +187,14 @@ const provideContextToChildren = <R>(
  * aren't provided above:
  *
  * ```ts
- * const Panel = component((_props: {}, children) =>
+ * const Panel = component((_props: object, children) =>
  *   Effect.gen(function* () {
  *     const { color } = yield* ThemeCtx;
  *     return yield* $.div({ "data-color": color }, children);
  *   }),
  * );
  *
- * // RequirementsOf<typeof Panel({})> includes ThemeCtx
+ * // RequirementsOf<typeof Panel()> includes ThemeCtx
  * ```
  *
  * Use {@link component.provides} to build a component that **supplies**
@@ -236,7 +236,7 @@ export function component<
  *     $.div({ class: "root" }, provide({ color: props.color })),
  * );
  *
- * const Panel = component((_props: {}, children) =>
+ * const Panel = component((_props: object, children) =>
  *   Effect.gen(function* () {
  *     const { color } = yield* ThemeCtx;
  *     return yield* $.span({ "data-color": color }, children);
@@ -244,7 +244,7 @@ export function component<
  * );
  *
  * // RequirementsOf includes no ThemeCtx — Root cancelled it.
- * const ui = Root({ color: "teal" }, Panel({}, "hi"));
+ * const ui = Root({ color: "teal" }, Panel("hi"));
  * ```
  *
  * To scope only part of `children` under the service, declare the
@@ -252,10 +252,10 @@ export function component<
  *
  * ```ts
  * const SplitRoot = component.provides(ThemeCtx)(
- *   (_props: {}, provide, children = []) =>
- *     $.div({},
- *       children.slice(0, 1),                   // raw
- *       provide({ color: "lime" }, children.slice(1)), // scoped
+ *   (_props: object, provide, children = []) =>
+ *     $.div(
+ *       children.slice(0, 1),                           // raw
+ *       provide({ color: "lime" }, children.slice(1)),  // scoped
  *     ),
  * );
  * ```
@@ -278,8 +278,8 @@ export function provides<T extends Context.Tag<any, any>>(
  * const MultiRoot = component.provides({
  *   theme: ThemeCtx,
  *   size: SizeCtx,
- * })((_props: {}, provide) =>
- *   $.div({},
+ * })((_props: object, provide) =>
+ *   $.div(
  *     provide({
  *       theme: { color: "cyan" },
  *       size: { scale: 2 },
