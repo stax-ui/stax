@@ -1,5 +1,5 @@
 /**
- * Unified inference spike — combining two discoveries:
+ * Unified inference spike — combining three discoveries:
  *
  * 1. If impl's declared `children` parameter is typed `Children<never,
  *    never>`, impl's return E and R channels contain only impl's own
@@ -7,23 +7,34 @@
  *    no "diff" to compute.
  *
  * 2. For the `Provides` axis, passing the Context.Tag as a runtime
- *    argument to `component.makes(Tag)` lets TS infer `Prov` from the
- *    Tag's Identifier type, without the author ever writing a type
+ *    argument to `component.provides(Tag)` lets TS infer `Prov` from
+ *    the Tag's Identifier type without the author ever writing a type
  *    argument.
+ *
+ * 3. For multi-service providers, pass a `{ label: Tag }` record to
+ *    `component.provides(...)`. TS extracts the union of
+ *    `Context.Tag.Identifier` across all values, and the matching
+ *    `provide({ label: service, ... })` call is type-checked against
+ *    the record's service shapes.
+ *
+ * Impl signature for providers: `(props, provide, children?) =>
+ * Element`. `provide` is the primary tool — it closes over impl's
+ * children and wraps them with the service(s). `children` is a third
+ * optional parameter for impl that wants to route children manually
+ * (e.g. slot some raw, scope others); `provide(service, specific)`
+ * accepts an explicit children override for that case.
  *
  * The runtime side carries a small "lie": children's actual E and R
  * at the call site are not what impl's signature declares. The
  * ComponentFactory wrapper re-attaches the call-site children's E and
  * R into the output via its overload type magic
- * (`ChildInputE<T[number]>`, `ChildInputR<T[number]>`). Impl's body
- * just forwards children opaquely — it doesn't need to see their
- * generics because it isn't doing anything with the type parameters
- * beyond passing them to inner factories.
+ * (`ChildInputE<T[number]>`, `ChildInputR<T[number]>`).
  *
- * End result: `component(impl)` covers pure leaves AND context
- * readers AND impl-can-fail cases, all with zero generics. The only
- * case that still needs an explicit carrier is Provides, via the
- * Tag-value `.makes` curry.
+ * End result: `component(impl)` covers pure leaves, context readers,
+ * and impl-can-fail with zero generics. Providers use
+ * `component.provides(Tag)(impl)` or
+ * `component.provides({ ... })(impl)`; the Tag value(s) are the only
+ * runtime carrier Provides needs.
  */
 
 import { Context, Effect, Scope } from "effect";
@@ -56,13 +67,13 @@ declare function component<
 ): ComponentFactory<Props, A, SelfE, SelfR, never>;
 
 /**
- * Provider path. Tag value in; impl receives a `provide(service)`
- * helper that wraps closed-over children with provideService and
- * returns them as `Children<never, never>` — ready to flow into
- * inner factories.
+ * Provider paths. Single-tag shorthand and record form share the same
+ * impl shape: `(props, provide, children?)`. `provide` closes over
+ * impl's children by default; pass an explicit second arg to override.
  */
 declare namespace component {
-  function makes<T extends Context.Tag<any, any>>(
+  // Single-tag shorthand.
+  function provides<T extends Context.Tag<any, any>>(
     tag: T,
   ): <
     Props,
@@ -72,10 +83,40 @@ declare namespace component {
   >(
     impl: (
       props: Props,
-      children: Children<never, never>,
-      provide: (service: Context.Tag.Service<T>) => Children<never, never>,
+      provide: (
+        service: Context.Tag.Service<T>,
+        children?: Children<never, never>,
+      ) => Children<never, never>,
+      children?: Children<never, never>,
     ) => StaxElement<A, SelfE, SelfR>,
   ) => ComponentFactory<Props, A, SelfE, SelfR, Context.Tag.Identifier<T>>;
+
+  // Record form — any number of services keyed by author-chosen
+  // labels. `provide({ label: service, ... })` takes the matching
+  // record.
+  function provides<Tags extends Record<string, Context.Tag<any, any>>>(
+    tags: Tags,
+  ): <
+    Props,
+    A extends HTMLElement | SVGElement | DocumentFragment,
+    SelfE,
+    SelfR,
+  >(
+    impl: (
+      props: Props,
+      provide: (
+        services: { [K in keyof Tags]: Context.Tag.Service<Tags[K]> },
+        children?: Children<never, never>,
+      ) => Children<never, never>,
+      children?: Children<never, never>,
+    ) => StaxElement<A, SelfE, SelfR>,
+  ) => ComponentFactory<
+    Props,
+    A,
+    SelfE,
+    SelfR,
+    Context.Tag.Identifier<Tags[keyof Tags]>
+  >;
 }
 
 // -----------------------------------------------------------------------------
@@ -206,9 +247,9 @@ export type _WithChildR = Expect<
   >
 >;
 
-// Provider via Tag-value `.makes`.
-const Root = component.makes(CollapsibleRootCtx)(
-  (props: RootProps, _children, provide) =>
+// Single-tag provider via `.provides(Tag)`.
+const Root = component.provides(CollapsibleRootCtx)(
+  (props: RootProps, provide) =>
     stubDiv(provide({ open: props.defaultOpen ?? false })),
 );
 const _rootCall = Root({}, "x");
@@ -221,4 +262,49 @@ export type _RootR = Expect<Equals<RequirementsOf<typeof _rootCall>, Ambient>>;
 const _rootPanelCall = Root({}, Panel({}, "inner"));
 export type _RootPanelR = Expect<
   Equals<RequirementsOf<typeof _rootPanelCall>, Ambient>
+>;
+
+// Record-form provider — multiple services at once.
+const MultiRoot = component.provides({
+  root: CollapsibleRootCtx,
+  toolbar: ToolbarCtx,
+})((props: RootProps, provide) =>
+  stubDiv(
+    provide({
+      root: { open: props.defaultOpen ?? false },
+      toolbar: { orientation: "horizontal" },
+    }),
+  ),
+);
+const _multiRootCall = MultiRoot({}, "x");
+export type _MultiRootA = Expect<
+  Equals<SuccessOf<typeof _multiRootCall>, HTMLDivElement>
+>;
+export type _MultiRootR = Expect<
+  Equals<RequirementsOf<typeof _multiRootCall>, Ambient>
+>;
+
+// MultiRoot wrapping a child that needs both services — both cancel.
+const _multiRootPanelCall = MultiRoot({}, PanelTwo({}, "inner"));
+export type _MultiRootPanelR = Expect<
+  Equals<RequirementsOf<typeof _multiRootPanelCall>, Ambient>
+>;
+
+// Escape hatch — impl takes raw `children` as a third param and routes
+// them through `provide` selectively. Here, impl's children arg is the
+// opaque `Children<never, never>` the trick gives us; `provide(service,
+// specific)` scopes an explicit subset instead of impl's closed-over
+// set. The author is responsible for making sure every real child ends
+// up scoped where needed — the lie about children's E/R means TS can't
+// catch mis-routing.
+const SplitRoot = component.provides(CollapsibleRootCtx)(
+  (props: RootProps, provide, children = []) =>
+    stubDiv([
+      ...children.slice(0, 1),
+      ...provide({ open: props.defaultOpen ?? false }, children.slice(1)),
+    ]),
+);
+const _splitRootCall = SplitRoot({}, "head", "body");
+export type _SplitRootA = Expect<
+  Equals<SuccessOf<typeof _splitRootCall>, HTMLDivElement>
 >;

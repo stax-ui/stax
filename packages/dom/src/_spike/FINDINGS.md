@@ -122,12 +122,25 @@ reports the correct composite type. `component()`'s runtime casts
 the result at that boundary.
 
 For `Provides`, the Tag-value trick: pass the Context.Tag as a
-runtime argument to `component.makes(Tag)`. TS unifies `T` with the
-Tag's type and extracts `Context.Tag.Identifier<T>` as the Provides
-slot. Impl receives a curried `provide(service)` helper that wraps
-closed-over children with `provideService` before returning
-them — same `Children<never, never>` shape as the pure path, so
-`Fails` and `Requires` still infer inside `makes` impls too.
+runtime argument to `component.provides(Tag)`. TS unifies `T` with
+the Tag's type and extracts `Context.Tag.Identifier<T>` as the
+Provides slot. Impl receives a curried `provide(service)` helper
+that wraps closed-over children with `provideService` before
+returning them — same `Children<never, never>` shape as the pure
+path, so `Fails` and `Requires` still infer inside provider impls
+too. For multi-service providers, pass a record of
+`{ label: Tag, ... }` — TS unions each value's
+`Context.Tag.Identifier` into the Provides slot, and the matching
+`provide({ label: service, ... })` is checked record-shaped against
+`Context.Tag.Service` of each.
+
+Impl signature for providers: `(props, provide, children?)`.
+`provide` is the primary tool and closes over impl's children by
+default; `children` is a third optional parameter for impl that
+wants to route children manually, and `provide` accepts an explicit
+second arg to scope a subset instead of the whole set. The lie
+about children's E/R means TS can't catch mis-routing when impl
+splits children — author's responsibility.
 
 ### Shapes the author writes
 
@@ -159,11 +172,23 @@ const Guarded = component((props: GuardedProps, children) =>
 // → ComponentFactory<GuardedProps, HTMLDivElement, GuardError, never, never>
 
 // Provider — Tag value carries Prov; Fails/Req still inferred.
-const Root = component.makes(CollapsibleRootCtx)(
-  (props: RootProps, _c, provide) =>
+const Root = component.provides(CollapsibleRootCtx)(
+  (props: RootProps, provide) =>
     $.div({}, provide({ open: props.defaultOpen ?? false })),
 );
 // → ComponentFactory<RootProps, HTMLDivElement, never, never, CollapsibleRootCtx>
+
+// Multi-service provider — record maps author-chosen labels to Tags.
+const MultiRoot = component.provides({
+  root: CollapsibleRootCtx,
+  toolbar: ToolbarCtx,
+})((props: RootProps, provide) =>
+  $.div({}, provide({
+    root: { open: props.defaultOpen ?? false },
+    toolbar: { orientation: "horizontal" },
+  })),
+);
+// → ComponentFactory<RootProps, HTMLDivElement, never, never, CollapsibleRootCtx | ToolbarCtx>
 ```
 
 **Zero type arguments anywhere.** Props is annotated on the impl's
@@ -206,8 +231,13 @@ real `Element`, `ComponentFactory`, `Effect`, and `Context.Tag`:
 - Impl that can fail — E channel inferred into the output.
 - Child at the call site carries its own E and R — unioned
   correctly into the output.
-- Provider via `component.makes(Tag)`, with `provide(service)`
-  wrapping children.
+- Single-tag provider via `component.provides(Tag)`, with
+  `provide(service)` wrapping children.
+- Record-form provider via
+  `component.provides({ root: Tag1, toolbar: Tag2 })`, with
+  `provide({ root, toolbar })` wrapping children.
+- Escape-hatch provider taking a third `children` param and routing
+  them selectively via `provide(service, specificChildren)`.
 - Panel-inside-Root composition: Panel's Req cancels under Root's
   Prov down to Ambient.
 
@@ -221,5 +251,7 @@ Expected>` — exact set equality, not just "compiles". Repo-wide
 This is a checkpoint, not a final decision — more design thoughts
 to land. The direction captured: `component(impl)` is the one-call
 form for everything that doesn't provide context;
-`component.makes(Tag)(impl)` is the one-call form for providers.
-See `dev_notes/COMPONENT.md`, §1 for the design-note write-up.
+`component.provides(Tag)(impl)` or
+`component.provides({ ... })(impl)` is the one-call form for
+providers, single-tag and multi-tag respectively. See
+`dev_notes/COMPONENT.md`, §1 for the design-note write-up.
