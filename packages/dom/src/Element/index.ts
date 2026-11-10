@@ -44,3 +44,4 @@ export type {
 } from "./types.js";
 
 export { $, MergePropsCtx } from "./DOMElements.js";
+export { isAttrsObject, splitArgs } from "../helpers/splitArgs.js";

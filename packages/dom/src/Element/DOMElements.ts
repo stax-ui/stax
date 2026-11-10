@@ -4,11 +4,11 @@
  */
 
 import { Effect, Option, Stream } from "effect";
-import { isEffect } from "effect/Effect";
 
 import { MergePropsCtx, Readable, RendererContext } from "@stax-ui/core";
 
 import { CspNonce } from "../CspNonce.js";
+import { splitArgs } from "../helpers/splitArgs.js";
 import * as Core from "./core.js";
 import type { ElementRef } from "./ref.js";
 import type { Child, ChildInput, ChildNode, Element } from "./types.js";
@@ -628,26 +628,6 @@ const applyAttributes = <T extends HTMLElement | SVGElement>(
 // =============================================================================
 
 /**
- * Runtime duck-type check: is this argument a plain attrs object (as opposed
- * to a ChildInput)? Attrs are plain objects that aren't Effects, Readables,
- * DOM nodes, or arrays. Anything else (string, number, boolean, null,
- * undefined, Effect, Readable, Node, array) is a ChildInput.
- *
- * Used by the factory to disambiguate `$.tag(attrs, ...children)` from
- * `$.tag(...children)` at runtime — TypeScript overloads pick statically
- * but the runtime needs to decide which slot arg[0] fills.
- */
-const isAttrsObject = (arg: unknown): boolean => {
-  if (arg == null) return false;
-  if (typeof arg !== "object") return false;
-  if (Array.isArray(arg)) return false;
-  if (isEffect(arg)) return false;
-  if (Readable.isReadable(arg)) return false;
-  if (typeof Node !== "undefined" && arg instanceof Node) return false;
-  return true;
-};
-
-/**
  * Normalize a list of {@link ChildInput}s into `Child` effects:
  *
  * - Strings / numbers wrap as text children via `Core.of`.
@@ -789,18 +769,6 @@ const createSVGElement = <K extends keyof SVGElementTagNameMap, E, R>(
 // =============================================================================
 
 /**
- * Split a variadic argument list into `[attrs, children]` at runtime.
- * TypeScript overloads pick statically; this is the runtime counterpart —
- * a duck-type check on `args[0]` decides whether it occupies the attrs slot.
- */
-const splitArgs = <A>(args: unknown[]): { attrs: A; children: unknown[] } => {
-  if (args.length > 0 && isAttrsObject(args[0])) {
-    return { attrs: args[0] as A, children: args.slice(1) };
-  }
-  return { attrs: {} as A, children: args };
-};
-
-/**
  * Create an HTML element factory for a specific tag.
  */
 const makeElementFactory = <K extends keyof HTMLElementTagNameMap>(
@@ -812,7 +780,11 @@ const makeElementFactory = <K extends keyof HTMLElementTagNameMap>(
     const normalized = normalizeChildren<E, R>(
       rawChildren as ReadonlyArray<ChildInput<E, R>>,
     );
-    return createElement(tagName, attrs, combineChildren(normalized));
+    return createElement(
+      tagName,
+      attrs ?? ({} as HTMLAttributes<HTMLElementTagNameMap[K]>),
+      combineChildren(normalized),
+    );
   }) as ElementFactory<K>;
 };
 
@@ -828,7 +800,11 @@ const makeSVGElementFactory = <K extends keyof SVGElementTagNameMap>(
     const normalized = normalizeChildren<E, R>(
       rawChildren as ReadonlyArray<ChildInput<E, R>>,
     );
-    return createSVGElement(tagName, attrs, combineChildren(normalized));
+    return createSVGElement(
+      tagName,
+      attrs ?? ({} as SVGAttributes<SVGElementTagNameMap[K]>),
+      combineChildren(normalized),
+    );
   }) as SVGElementFactory<K>;
 };
 
@@ -986,11 +962,15 @@ const enableCspNonce = <K extends keyof HTMLElementTagNameMap>(
           : attrs;
       // Call back into the stock factory with the (possibly stamped)
       // attrs. The explicit-attrs-plus-children arity is the one the
-      // stock factory also handles via its own `splitArgs`.
-      const inner = factory(
-        effectiveAttrs as Attrs & object,
-        ...(children as ChildInput<E, R>[]),
-      );
+      // stock factory also handles via its own `splitArgs`. Skip the
+      // attrs slot entirely when we have none to pass — otherwise the
+      // stock factory would see a leading `undefined` and process it
+      // as a (skipped) child, which is wasteful.
+      const forwardedChildren = children as ChildInput<E, R>[];
+      const inner =
+        effectiveAttrs !== undefined
+          ? factory(effectiveAttrs as Attrs & object, ...forwardedChildren)
+          : factory(...forwardedChildren);
       return yield* inner;
     })) as unknown as ElementFactory<K>;
 };
