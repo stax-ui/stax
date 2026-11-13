@@ -5,7 +5,7 @@ import { ClientControlCtx } from "../Control/ClientControlCtx.js";
 import { $ } from "../Element/index.js";
 import { DOMRendererLive } from "../Render/DOMRenderer.js";
 import { ClientSuspenseBoundaryCtx } from "../SuspenseBoundaryCtx/index.js";
-import { component } from "./component.js";
+import { container } from "./container.js";
 
 const TestLayer = Layer.provideMerge(
   Layer.mergeAll(ClientSuspenseBoundaryCtx, ClientControlCtx),
@@ -41,10 +41,10 @@ class SizeCtx extends Context.Tag("SizeCtx")<
 
 // -----------------------------------------------------------------------------
 
-describe("component", () => {
+describe("container", () => {
   describe("pure path", () => {
     it("builds a factory that renders with no props and no children", async () => {
-      const Leaf = component((_props: { label?: string }, children) =>
+      const Leaf = container((_props: { label?: string }, children) =>
         $.span({ class: "leaf" }, children),
       );
       const el = await runTest(Leaf());
@@ -53,7 +53,7 @@ describe("component", () => {
     });
 
     it("accepts a children-only call when every prop is optional", async () => {
-      const Leaf = component((_props: { label?: string }, children) =>
+      const Leaf = container((_props: { label?: string }, children) =>
         $.span({}, children),
       );
       const el = await runTest(Leaf("hello"));
@@ -61,7 +61,7 @@ describe("component", () => {
     });
 
     it("accepts props-plus-variadic children", async () => {
-      const Wrap = component((props: { tone: string }, children) =>
+      const Wrap = container((props: { tone: string }, children) =>
         $.div({ "data-tone": props.tone }, children),
       );
       const el = await runTest(Wrap({ tone: "muted" }, "a", "b"));
@@ -70,7 +70,7 @@ describe("component", () => {
     });
 
     it("accepts props-plus-forwarded-array children", async () => {
-      const Wrap = component((props: { tone: string }, children) =>
+      const Wrap = container((props: { tone: string }, children) =>
         $.div({ "data-tone": props.tone }, children),
       );
       const el = await runTest(Wrap({ tone: "loud" }, ["x", "y", "z"]));
@@ -78,7 +78,7 @@ describe("component", () => {
     });
 
     it("preserves impl's yield* context requirement on the output", async () => {
-      const Panel = component((_props: { keepMounted?: boolean }, children) =>
+      const Panel = container((_props: { keepMounted?: boolean }, children) =>
         Effect.gen(function* () {
           const { color } = yield* ThemeCtx;
           return yield* $.div({ "data-color": color }, children);
@@ -96,14 +96,14 @@ describe("component", () => {
 
   describe("provides — single tag", () => {
     it("provides the service to effectful children", async () => {
-      const Panel = component((_props: object, children) =>
+      const Panel = container((_props: object, children) =>
         Effect.gen(function* () {
           const { color } = yield* ThemeCtx;
           return yield* $.span({ "data-color": color }, children);
         }),
       );
 
-      const Root = component.provides(ThemeCtx)((_props: object, provide) =>
+      const Root = container.provides(ThemeCtx)((_props: object, provide) =>
         $.div({ class: "root" }, provide({ color: "teal" })),
       );
 
@@ -114,7 +114,7 @@ describe("component", () => {
     });
 
     it("leaves non-effectful children alone", async () => {
-      const Root = component.provides(ThemeCtx)((_props: object, provide) =>
+      const Root = container.provides(ThemeCtx)((_props: object, provide) =>
         $.div({}, provide({ color: "red" })),
       );
       const el = await runTest(Root({}, "plain text"));
@@ -122,7 +122,7 @@ describe("component", () => {
     });
 
     it("passes props through to impl", async () => {
-      const Root = component.provides(ThemeCtx)(
+      const Root = container.provides(ThemeCtx)(
         (props: { seed: string }, provide) =>
           $.div({ "data-seed": props.seed }, provide({ color: "indigo" })),
       );
@@ -133,7 +133,7 @@ describe("component", () => {
 
   describe("provides — record form", () => {
     it("provides every service in the record", async () => {
-      const Panel = component((_props: object, children) =>
+      const Panel = container((_props: object, children) =>
         Effect.gen(function* () {
           const { color } = yield* ThemeCtx;
           const { scale } = yield* SizeCtx;
@@ -144,7 +144,7 @@ describe("component", () => {
         }),
       );
 
-      const MultiRoot = component.provides({
+      const MultiRoot = container.provides({
         theme: ThemeCtx,
         size: SizeCtx,
       })((_props: object, provide) =>
@@ -167,7 +167,7 @@ describe("component", () => {
   describe("provides — escape-hatch children override", () => {
     it("scopes only the explicit subset when provide(service, override) is used", async () => {
       // Child reads ThemeCtx; without the service, this fails at runtime.
-      const Reader = component((_props: object, children) =>
+      const Reader = container((_props: object, children) =>
         Effect.gen(function* () {
           const { color } = yield* ThemeCtx;
           return yield* $.span({ "data-color": color }, children);
@@ -176,7 +176,7 @@ describe("component", () => {
 
       // Root receives two children. It routes only the SECOND through
       // provide(); the FIRST is passed raw and must be a non-reader.
-      const SplitRoot = component.provides(ThemeCtx)(
+      const SplitRoot = container.provides(ThemeCtx)(
         (_props: object, provide, children = []) =>
           $.div(
             {},

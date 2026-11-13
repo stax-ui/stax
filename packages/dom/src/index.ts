@@ -91,6 +91,19 @@ export type { SuspenseOptions, BoundarySuspenseOptions } from "./Boundary.js";
 export { CspNonce } from "./CspNonce.js";
 export type { CspNonceService } from "./CspNonce.js";
 
+// Container factory
+export { container } from "./Container/index.js";
+export type {
+  ContainerFactory,
+  ContainerImpl,
+  ProvideMany,
+  ProvideOne,
+  ProviderImplMany,
+  ProviderImplOne,
+  WithoutProps,
+  WithProps,
+} from "./Container/index.js";
+
 // Context provision
 export { provide } from "./Provide.js";
 
