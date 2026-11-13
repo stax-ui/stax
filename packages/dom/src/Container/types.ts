@@ -2,7 +2,7 @@ import type { ChildInputE, ChildInputR } from "../Element/DOMElements.js";
 import type { ChildInput, Element as StaxElement } from "../Element/types.js";
 
 /**
- * Call-site shape when the component has at least one required prop.
+ * Call-site shape when the container has at least one required prop.
  *
  * Two overloads, matching the `$` factories: a forwarding form (children
  * as a single array, one `<ChildE, ChildR>` pair) and a variadic form
@@ -56,10 +56,10 @@ export interface WithoutProps<
 }
 
 /**
- * A user-defined component's public call surface.
+ * A user-defined container's public call surface.
  *
  * `{} extends Props` is the "every prop is optional" guard — only when
- * it holds do the no-props overloads exist. For a component with a
+ * it holds do the no-props overloads exist. For a container with a
  * required prop the intersection collapses to {@link WithProps}, and
  * calling it with no first-arg object is a type error.
  *
@@ -67,7 +67,7 @@ export interface WithoutProps<
  * input, then A / E / R describe the output, with Provides as the
  * R-transformer. `E`, `R`, and `Provides` all default to `never`.
  */
-export type ComponentFactory<
+export type ContainerFactory<
   Props,
   A extends HTMLElement | SVGElement | DocumentFragment,
   E = never,
