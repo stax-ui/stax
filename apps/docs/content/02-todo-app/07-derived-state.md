@@ -19,7 +19,7 @@ const count = yield* Signal.make(5);
 const doubled = Readable.map(count, n => n * 2);
 
 // Use it in the UI
-$.span({}, doubled)  // Displays "10", updates automatically
+$.span(doubled)  // Displays "10", updates automatically
 ```
 
 The derived value:

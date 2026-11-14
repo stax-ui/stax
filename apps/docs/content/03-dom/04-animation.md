@@ -72,7 +72,6 @@ const Hero = () =>
     const [logo, subhead, cta] = yield* Animation.sequence(3);
 
     return yield* $.div(
-      {},
       animated(
         { animate: { enterFrom: "opacity-0", enter: "logo-in", group: logo } },
         () => LogoMark(),
@@ -86,7 +85,7 @@ const Hero = () =>
             group: subhead,
           },
         },
-        () => $.p({}, "A reactive UI framework"),
+        () => $.p("A reactive UI framework"),
       ),
       animated(
         {
@@ -147,7 +146,6 @@ You don't always need `skip` explicitly. If a sequence step has **no** registere
 ```typescript
 const [logo, chips, cta] = yield* Animation.sequence(3);
 return yield* $.div(
-  {},
   StaxLogo({ group: logo, intro: true }),
   // On mobile, don't render the chips at all. The `chips` group has
   // no registrations, so its `_done` fires on the next tick and

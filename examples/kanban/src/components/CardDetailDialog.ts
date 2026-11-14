@@ -108,7 +108,7 @@ export const CardDetailDialog = () =>
                             { class: "label-text-alt text-error mt-1" },
                             "Title is required",
                           ),
-                        onFalse: () => $.span({}, ""),
+                        onFalse: () => $.span(""),
                       }),
                     );
                   }),

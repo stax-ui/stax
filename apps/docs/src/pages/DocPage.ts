@@ -31,9 +31,9 @@ export const DocPage = (props: {
               "flex flex-col items-start gap-1 text-sm hover:text-primary transition-colors",
           },
           $.span({ class: "text-base-content/50 text-xs" }, "Previous"),
-          $.span({}, `← ${props.prev.title}`),
+          $.span(`← ${props.prev.title}`),
         )
-      : $.div({}),
+      : $.div(),
     props.next
       ? Link(
           {
@@ -42,9 +42,9 @@ export const DocPage = (props: {
               "flex flex-col items-end gap-1 text-sm hover:text-primary transition-colors",
           },
           $.span({ class: "text-base-content/50 text-xs" }, "Next"),
-          $.span({}, `${props.next.title} →`),
+          $.span(`${props.next.title} →`),
         )
-      : $.div({}),
+      : $.div(),
   );
 
   return SidebarLayout(

@@ -26,7 +26,7 @@ mount(UserProfile(), document.body); // Type error!
 mount(
   Boundary.error(
     () => UserProfile(),
-    (error) => $.div({}, `Failed to load: ${error.message}`),
+    (error) => $.div(`Failed to load: ${error.message}`),
   ),
   document.body,
 ); // Compiles
@@ -53,7 +53,7 @@ const Counter = () =>
   Effect.gen(function* () {
     const count = yield* Signal.make(0);
     console.log("render"); // Logs once, on mount
-    return yield* $.div({}, count); // count changes update only this text
+    return yield* $.div(count); // count changes update only this text
   });
 ```
 
@@ -117,7 +117,7 @@ function Parent() {
 const Parent = () =>
   Effect.gen(function* () {
     const count = yield* Signal.make(0); // Child doesn't care
-    return yield* $.div({}, Child()); // Child never "re-renders"
+    return yield* $.div(Child()); // Child never "re-renders"
   });
 ```
 
@@ -132,8 +132,8 @@ Boundary.suspense({
       const user = yield* fetchUser(id); // Can fail!
       return yield* UserProfile({ user });
     }),
-  fallback: () => $.div({}, "Loading..."),
-  catch: (error) => $.div({}, `Error: ${error.message}`),
+  fallback: () => $.div("Loading..."),
+  catch: (error) => $.div(`Error: ${error.message}`),
   delay: "200 millis", // Avoid loading flash
 });
 ```
@@ -198,7 +198,7 @@ const Cart = (props: { items: Readable.Readable<Item[]> }) =>
     const total = Readable.map(props.items, (items) =>
       items.reduce((sum, i) => sum + i.price, 0),
     );
-    return yield* $.div({}, t`Total: $${total}`);
+    return yield* $.div(t`Total: $${total}`);
   });
 ```
 
@@ -238,7 +238,7 @@ const TodoList = (props: { todos: Readable.Readable<Todo[]> }) =>
     container: () => $.ul(),
     key: (todo) => todo.id,
     render: (todo) =>
-      $.li({}, Readable.map(todo, (t) => t.text)),
+      $.li(Readable.map(todo, (t) => t.text)),
   });
 ```
 
@@ -258,10 +258,10 @@ const UserProfile = (props: { id: string }) =>
     render: () =>
       Effect.gen(function* () {
         const user = yield* fetchUser(props.id);
-        return yield* $.div({}, user.name);
+        return yield* $.div(user.name);
       }),
-    fallback: () => $.div({}, "Loading..."),
-    catch: (e) => $.div({}, `Error: ${e}`),
+    fallback: () => $.div("Loading..."),
+    catch: (e) => $.div(`Error: ${e}`),
   });
 
 // Stax — Option 2: AsyncReadable (reactive, with refetch)
@@ -270,13 +270,12 @@ const UserProfileAsync = (props: { id: string }) =>
     const userData = yield* AsyncReadable.make(() => fetchUser(props.id));
 
     return yield* $.div(
-      {},
       when(userData.isLoading, {
-        onTrue: () => $.div({}, "Loading..."),
+        onTrue: () => $.div("Loading..."),
         onFalse: () => $.span(),
       }),
       matchOption(userData.value, {
-        onSome: (user) => $.div({}, Readable.map(user, (u) => u.name)),
+        onSome: (user) => $.div(Readable.map(user, (u) => u.name)),
         onNone: () => $.span(),
       }),
       matchOption(userData.error, {
@@ -358,7 +357,7 @@ const DocumentTitle = (props: {
       Effect.sync(() => localStorage.setItem("lastTitle", title)),
     );
 
-    return yield* $.h1({}, props.title);
+    return yield* $.h1(props.title);
   });
 ```
 

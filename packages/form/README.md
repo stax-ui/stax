@@ -45,8 +45,7 @@ const EmailField = () =>
     const hasError = Readable.map(field.errors, (e) => e.length > 0);
 
     return yield* $.div(
-      {},
-      $.label({}, "Email"),
+      $.label("Email"),
       $.input({
         type: "email",
         value: field.value,
@@ -66,8 +65,7 @@ const PasswordField = () =>
     const hasError = Readable.map(field.errors, (e) => e.length > 0);
 
     return yield* $.div(
-      {},
-      $.label({}, "Password"),
+      $.label("Password"),
       $.input({
         type: "password",
         value: field.value,
@@ -295,7 +293,7 @@ const FormStatus = () =>
     const form = yield* MyForm.form;
 
     return yield* when(form.isDirty, {
-      onTrue: () => $.span({}, $.of("You have unsaved changes")),
+      onTrue: () => $.span($.of("You have unsaved changes")),
       onFalse: () => $.span(),
     });
   });

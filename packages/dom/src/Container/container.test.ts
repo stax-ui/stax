@@ -54,7 +54,7 @@ describe("container", () => {
 
     it("accepts a children-only call when every prop is optional", async () => {
       const Leaf = container((_props: { label?: string }, children) =>
-        $.span({}, children),
+        $.span(children),
       );
       const el = await runTest(Leaf("hello"));
       expect(el.textContent).toBe("hello");
@@ -115,7 +115,7 @@ describe("container", () => {
 
     it("leaves non-effectful children alone", async () => {
       const Root = container.provides(ThemeCtx)((_props: object, provide) =>
-        $.div({}, provide({ color: "red" })),
+        $.div(provide({ color: "red" })),
       );
       const el = await runTest(Root({}, "plain text"));
       expect(el.textContent).toBe("plain text");
@@ -149,7 +149,6 @@ describe("container", () => {
         size: SizeCtx,
       })((_props: object, provide) =>
         $.div(
-          {},
           provide({
             theme: { color: "cyan" },
             size: { scale: 2 },
@@ -179,7 +178,6 @@ describe("container", () => {
       const SplitRoot = container.provides(ThemeCtx)(
         (_props: object, provide, children = []) =>
           $.div(
-            {},
             children.slice(0, 1),
             provide({ color: "lime" }, children.slice(1)),
           ),

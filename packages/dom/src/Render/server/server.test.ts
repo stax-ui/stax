@@ -40,7 +40,7 @@ describe("SSR", () => {
 
     it("should escape HTML in text content", async () => {
       const html = await Effect.runPromise(
-        renderToString($.div({}, "<script>alert('xss')</script>")),
+        renderToString($.div("<script>alert('xss')</script>")),
       );
 
       expect(html).not.toContain("<script>");
@@ -65,8 +65,8 @@ describe("SSR", () => {
             const condition = yield* Signal.make(true);
             return yield* renderToString(
               when(condition, {
-                onTrue: () => $.div({}, "Visible"),
-                onFalse: () => $.div({}, "Hidden"),
+                onTrue: () => $.div("Visible"),
+                onFalse: () => $.div("Hidden"),
               }),
             );
           }),
@@ -86,8 +86,8 @@ describe("SSR", () => {
             const condition = yield* Signal.make(false);
             return yield* renderToString(
               when(condition, {
-                onTrue: () => $.div({}, "Visible"),
-                onFalse: () => $.div({}, "Hidden"),
+                onTrue: () => $.div("Visible"),
+                onFalse: () => $.div("Hidden"),
               }),
             );
           }),
@@ -113,13 +113,13 @@ describe("SSR", () => {
                 cases: [
                   {
                     pattern: "loading",
-                    render: () => $.div({}, "Loading..."),
+                    render: () => $.div("Loading..."),
                   },
                   {
                     pattern: "success",
-                    render: () => $.div({}, "Done!"),
+                    render: () => $.div("Done!"),
                   },
-                  { pattern: "error", render: () => $.div({}, "Failed") },
+                  { pattern: "error", render: () => $.div("Failed") },
                 ],
               }),
             );
@@ -140,10 +140,10 @@ describe("SSR", () => {
             return yield* renderToString(
               match(value, {
                 cases: [
-                  { pattern: 1, render: () => $.div({}, "One") },
-                  { pattern: 2, render: () => $.div({}, "Two") },
+                  { pattern: 1, render: () => $.div("One") },
+                  { pattern: 2, render: () => $.div("Two") },
                 ],
-                fallback: () => $.div({}, "Unknown"),
+                fallback: () => $.div("Unknown"),
               }),
             );
           }),
@@ -167,11 +167,7 @@ describe("SSR", () => {
               each(items, {
                 container: () => $.ul({ class: "list" }),
                 key: (item) => item.id,
-                render: (item) =>
-                  $.li(
-                    {},
-                    Readable.map(item, (i) => i.name),
-                  ),
+                render: (item) => $.li(Readable.map(item, (i) => i.name)),
               }),
             );
           }),
@@ -197,11 +193,7 @@ describe("SSR", () => {
             return yield* renderToString(
               each(items, {
                 key: (item) => item.id,
-                render: (item) =>
-                  $.li(
-                    {},
-                    Readable.map(item, (i) => i.name),
-                  ),
+                render: (item) => $.li(Readable.map(item, (i) => i.name)),
               }),
             );
           }),
@@ -219,7 +211,7 @@ describe("SSR", () => {
         Effect.scoped(
           Effect.gen(function* () {
             const count = yield* Signal.make(42);
-            return yield* renderToString($.div({}, "Count: ", count));
+            return yield* renderToString($.div("Count: ", count));
           }),
         ),
       );
@@ -256,9 +248,9 @@ describe("SSR", () => {
             render: () =>
               Effect.gen(function* () {
                 yield* Effect.sleep(100);
-                return yield* $.div({}, "Loaded content");
+                return yield* $.div("Loaded content");
               }),
-            fallback: () => $.div({}, "Loading..."),
+            fallback: () => $.div("Loading..."),
           }),
         ),
       );
@@ -278,10 +270,10 @@ describe("SSR", () => {
             render: () =>
               Effect.gen(function* () {
                 yield* Effect.sleep(100);
-                return yield* $.div({}, "Success");
+                return yield* $.div("Success");
               }),
-            fallback: () => $.div({}, "Loading..."),
-            catch: () => $.div({}, "Error occurred"),
+            fallback: () => $.div("Loading..."),
+            catch: () => $.div("Error occurred"),
           }),
         ),
       );
@@ -298,7 +290,7 @@ describe("SSR", () => {
           const items = yield* Signal.make(["a", "b"]);
           return yield* each(items, {
             key: (item) => item,
-            render: (item) => $.li({}, item),
+            render: (item) => $.li(item),
             animate: {
               enterFrom: "opacity-0 translate-y-2",
               enter: "opacity-100 translate-y-0",
@@ -323,7 +315,7 @@ describe("SSR", () => {
           const items = yield* Signal.make(["a", "b"]);
           return yield* each(items, {
             key: (item) => item,
-            render: (item) => $.li({}, item),
+            render: (item) => $.li(item),
             animate: {
               enterFrom: "opacity-0",
               enter: "opacity-100",
@@ -342,7 +334,7 @@ describe("SSR", () => {
           const visible = yield* Signal.make(true);
           return yield* when(visible, {
             onTrue: () => $.div({ class: "hero" }, "Hi"),
-            onFalse: () => $.div({}, ""),
+            onFalse: () => $.div(""),
             animate: {
               enterFrom: "opacity-0",
               enter: "opacity-100",
@@ -367,7 +359,7 @@ describe("SSR", () => {
               },
               intro: true,
             },
-            () => $.h1({}, "Hero"),
+            () => $.h1("Hero"),
           ),
         ),
       );
@@ -387,7 +379,7 @@ describe("SSR", () => {
                 enter: "opacity-100",
               },
             },
-            () => $.h1({}, "Hero"),
+            () => $.h1("Hero"),
           ),
         ),
       );
@@ -425,8 +417,8 @@ describe("SSR", () => {
             const visible = yield* Signal.make(true);
             return yield* renderToString(
               when(visible, {
-                onTrue: () => $.div({}, "yes"),
-                onFalse: () => $.div({}, "no"),
+                onTrue: () => $.div("yes"),
+                onFalse: () => $.div("no"),
               }),
             );
           }),
@@ -452,14 +444,13 @@ describe("SSR", () => {
             const b = yield* Signal.make(true);
             return yield* renderToString(
               $.div(
-                {},
                 when(a, {
-                  onTrue: () => $.span({}, "A"),
-                  onFalse: () => $.span({}, "a"),
+                  onTrue: () => $.span("A"),
+                  onFalse: () => $.span("a"),
                 }),
                 when(b, {
-                  onTrue: () => $.span({}, "B"),
-                  onFalse: () => $.span({}, "b"),
+                  onTrue: () => $.span("B"),
+                  onFalse: () => $.span("b"),
                 }),
               ),
             );
@@ -487,7 +478,7 @@ describe("SSR", () => {
 
     it("stamps $.style with the ambient CspNonce", async () => {
       const html = await Effect.runPromise(
-        withNonce(renderToString($.style({}, ".x{color:red}")), "r4nd0m"),
+        withNonce(renderToString($.style(".x{color:red}")), "r4nd0m"),
       );
       expect(html).toContain('nonce="r4nd0m"');
     });

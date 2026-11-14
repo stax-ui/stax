@@ -16,8 +16,8 @@ The `when` helper conditionally renders elements:
 import { when } from "@stax-ui/dom";
 
 when(condition, {
-  onTrue: () => $.div({}, "Shown when true"),
-  onFalse: () => $.div({}, "Shown when false"),  // optional
+  onTrue: () => $.div("Shown when true"),
+  onFalse: () => $.div("Shown when false"),  // optional
 })
 ```
 
@@ -146,7 +146,7 @@ Here's how the main structure looks now:
 return yield* $.div({ class: "todo-app" },
   // Header (always shown)
   $.header({ class: "header" },
-    $.h1({}, "todos"),
+    $.h1("todos"),
     $.input({
       class: "new-todo",
       placeholder: "What needs to be done?",
@@ -214,7 +214,7 @@ You can add enter/exit animations to `when`:
 
 ```typescript
 when(condition, {
-  onTrue: () => $.div({}, "Animated!"),
+  onTrue: () => $.div("Animated!"),
   animate: {
     enter: "fade-in",
     exit: "fade-out",

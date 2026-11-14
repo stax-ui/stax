@@ -22,7 +22,7 @@ describe("_mountScoped", () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          yield* mount($.div({}, "Hello"), container);
+          yield* mount($.div("Hello"), container);
 
           expect(container.children.length).toBe(1);
           expect(container.textContent).toBe("Hello");
@@ -35,10 +35,7 @@ describe("_mountScoped", () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          yield* mount(
-            $.div({}, $.span({}, "Hello"), $.span({}, "World")),
-            container,
-          );
+          yield* mount($.div($.span("Hello"), $.span("World")), container);
 
           expect(container.children.length).toBe(1);
           const mounted = container.children[0];
@@ -52,7 +49,7 @@ describe("_mountScoped", () => {
     const fiber = Effect.runFork(
       Effect.scoped(
         Effect.gen(function* () {
-          yield* mount($.div({}, "Mounted"), container);
+          yield* mount($.div("Mounted"), container);
           yield* Effect.sleep(100);
         }),
       ),
@@ -76,7 +73,7 @@ describe("_mountScoped", () => {
     const fiber = Effect.runFork(
       Effect.scoped(
         Effect.gen(function* () {
-          const el = yield* $.div({}, "Test");
+          const el = yield* $.div("Test");
           mountedElement = el;
           yield* mount(Effect.succeed(el), container);
           yield* Effect.sleep(100);
@@ -104,8 +101,8 @@ describe("_mountScoped", () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          yield* mount($.div({}, "First"), container);
-          yield* mount($.div({}, "Second"), container);
+          yield* mount($.div("First"), container);
+          yield* mount($.div("Second"), container);
 
           expect(container.children.length).toBe(2);
           expect(container.children[0].textContent).toBe("First");

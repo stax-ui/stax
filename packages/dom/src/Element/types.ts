@@ -100,7 +100,7 @@ export type ChildInput<E = never, R = never> =
  *   props: { heading: string },
  *   ...children: Children<E, R>
  * ): Element<HTMLElement, E, R> =>
- *   $.section({}, $.h2({}, props.heading), children);
+ *   $.section($.h2(props.heading), children);
  * ```
  *
  * Uses `ChildLeaf` under the hood — no array-as-single-arg from the caller,

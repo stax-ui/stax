@@ -52,7 +52,7 @@ const App = () =>
 
     return yield* $.div({ class: "todo-app" },
       $.header({ class: "header" },
-        $.h1({}, "todos"),
+        $.h1("todos"),
         $.input({
           class: "new-todo",
           placeholder: "What needs to be done?",
@@ -167,7 +167,7 @@ const App = () =>
 
     return yield* $.div({ class: "todo-app" },
       $.header({ class: "header" },
-        $.h1({}, "todos"),
+        $.h1("todos"),
         $.input({
           class: "new-todo",
           placeholder: "What needs to be done?",

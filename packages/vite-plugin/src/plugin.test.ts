@@ -171,7 +171,7 @@ export const FeedRoute = Route.make("/").pipe(
       // `.` on the right — so `\b$\b` couldn't match a real usage, and
       // `$`-only imports were misclassified as dead.
       const input = `import { $ } from "@stax-ui/dom";
-const App = () => $.div({}, "hi");`;
+const App = () => $.div("hi");`;
       const result = stripServerCode(input);
       expect(result).toContain('import { $ } from "@stax-ui/dom"');
     });
@@ -182,7 +182,7 @@ const App = () => $.div({}, "hi");`;
       // the "all dead" check short-circuits when any one specifier looks
       // used.
       const input = `import { $, when } from "@stax-ui/dom";
-const App = () => $.div({}, when(cond, { onTrue: () => Yes(), onFalse: () => No() }));`;
+const App = () => $.div(when(cond, { onTrue: () => Yes(), onFalse: () => No() }));`;
       const result = stripServerCode(input);
       expect(result).toContain('import { $, when } from "@stax-ui/dom"');
     });
@@ -266,7 +266,7 @@ const B = Route.make("/b").pipe(
       // the transform threw it away before calling the user's render.
       const input = `Route.static({
   load: () => Effect.succeed({ title: "About" }),
-  render: (data) => $.h1({}, $.of(data.title)),
+  render: (data) => $.h1($.of(data.title)),
 })`;
       const result = stripServerCode(input);
       expect(result).not.toContain("(undefined)");

@@ -30,8 +30,8 @@ import { $ } from "@stax-ui/dom";
 const Greeting = (props: { name: string }) =>
   $.div(
     { class: "greeting" },
-    $.h1({}, `Hello, ${props.name}!`),
-    $.p({}, "Welcome to Stax"),
+    $.h1(`Hello, ${props.name}!`),
+    $.p("Welcome to Stax"),
   );
 ```
 
@@ -48,9 +48,8 @@ const Counter = () =>
     const count = yield* Signal.make(0);
 
     return yield* $.div(
-      {},
       $.button({ onClick: () => count.update((n) => n - 1) }, "-"),
-      $.span({}, count),
+      $.span(count),
       $.button({ onClick: () => count.update((n) => n + 1) }, "+"),
     );
   });
@@ -81,8 +80,8 @@ The `$` namespace contains factories for all HTML and SVG elements. Elements are
 ```ts
 yield* $.div(
   { class: "container", style: { color: "red" } },
-  $.h1({}, name),
-  $.p({}, t`${count} items`),
+  $.h1(name),
+  $.p(t`${count} items`),
 );
 ```
 
@@ -92,19 +91,18 @@ Pass children directly after the attributes object. Strings, numbers, Readables,
 
 ```ts
 // Single child
-yield* $.h1({}, "Hello World");
+yield* $.h1("Hello World");
 
 // Multiple children of mixed types
-yield* $.div({},
-  "Hello",
-  $.span({}, "World"),
+yield* $.div("Hello",
+  $.span("World"),
 );
 
 // Conditional children — `false`, `null`, `undefined` are skipped
-yield* $.div({}, cond && $.span({}, "shown"));
+yield* $.div(cond && $.span("shown"));
 
 // Empty child (explicit no-op)
-yield* $.div({}, $.empty);
+yield* $.div($.empty);
 ```
 
 ### Attributes
@@ -180,7 +178,7 @@ const name = yield* Signal.make("World");
 const count = yield* Signal.make(0);
 
 // Creates a Readable<string> that updates automatically
-yield* $.p({}, t`Hello, ${name}! Count: ${count}`);
+yield* $.p(t`Hello, ${name}! Count: ${count}`);
 ```
 
 ## Defining Components
@@ -191,7 +189,7 @@ Components without state or context requirements are plain functions that return
 
 ```ts
 const Greeting = (props: { name: string }) =>
-  $.h1({}, `Hello, ${props.name}!`);
+  $.h1(`Hello, ${props.name}!`);
 
 // With variadic children — generic over E and R to propagate types.
 // Use `Children<E, R>` when the wrapper interleaves its own elements
@@ -202,7 +200,7 @@ const Card = <E = never, R = never>(
 ) =>
   $.div(
     { class: "card" },
-    $.h2({}, props.title),
+    $.h2(props.title),
     children,
   );
 ```
@@ -216,9 +214,8 @@ const Counter = () =>
   Effect.gen(function* () {
     const count = yield* Signal.make(0);
     return yield* $.div(
-      {},
       $.button({ onClick: () => count.update((n) => n - 1) }, "-"),
-      $.span({}, count),
+      $.span(count),
       $.button({ onClick: () => count.update((n) => n + 1) }, "+"),
     );
   });
@@ -226,7 +223,7 @@ const Counter = () =>
 const UserBadge = () =>
   Effect.gen(function* () {
     const user = yield* UserContext;  // Requires context
-    return yield* $.span({}, user.name);
+    return yield* $.span(user.name);
   });
 ```
 
@@ -248,7 +245,7 @@ const ThemedButton = (props: { label: string }) =>
   });
 
 // Provide context to children
-$.div({}, provide(ThemeContext, theme, ThemedButton({ label: "Click" })));
+$.div(provide(ThemeContext, theme, ThemedButton({ label: "Click" })));
 ```
 
 ## Control Flow
@@ -261,8 +258,8 @@ Conditionally render based on a reactive boolean:
 import { when } from "@stax-ui/dom";
 
 when(isLoggedIn, {
-  onTrue: () => $.div({}, "Welcome back!"),
-  onFalse: () => $.div({}, "Please log in"),
+  onTrue: () => $.div("Welcome back!"),
+  onFalse: () => $.div("Please log in"),
 });
 ```
 
@@ -279,7 +276,7 @@ match(status, {
     { pattern: "error", render: () => ErrorMessage() },
     { pattern: "success", render: () => Content() },
   ],
-  fallback: () => $.div({}, "Unknown"),
+  fallback: () => $.div("Unknown"),
 });
 ```
 
@@ -309,7 +306,7 @@ import { matchOption, matchEither } from "@stax-ui/dom";
 // userData.value is Readable<Option<User>>
 matchOption(userData.value, {
   onSome: (user) => UserCard({ user }),  // user is Readable<User>
-  onNone: () => $.div({}, "No user"),
+  onNone: () => $.div("No user"),
 });
 
 matchEither(result, {
@@ -345,8 +342,8 @@ Boundary.suspense({
       const user = yield* fetchUser(id);
       return yield* UserProfile({ user });
     }),
-  fallback: () => $.div({}, "Loading..."),
-  catch: (error) => $.div({}, `Error: ${error.message}`),
+  fallback: () => $.div("Loading..."),
+  catch: (error) => $.div(`Error: ${error.message}`),
   delay: "200 millis", // Avoid loading flash for fast responses
 });
 ```
@@ -356,7 +353,7 @@ Boundary.suspense({
 ```ts
 Boundary.error(
   () => RiskyComponent(),
-  (error) => $.div({}, `Failed: ${error.message}`),
+  (error) => $.div(`Failed: ${error.message}`),
 );
 ```
 
@@ -542,7 +539,7 @@ For find-in-page revealing, pass `hiddenValue: "until-found"` and listen for the
 ```ts
 const open = yield* Signal.make(false);
 
-yield* $.section({}, longFormContent).pipe(
+yield* $.section(longFormContent).pipe(
   Element.on("beforematch", () => open.set(true)),
   Element.bindVisible(open, { hiddenValue: "until-found" }),
 );
@@ -631,7 +628,7 @@ virtualEach(items, {
   key: (item) => item.id,
   itemHeight: 48,
   height: 400,
-  render: (item) => $.li({}, item.pipe(Readable.map((i) => i.text))),
+  render: (item) => $.li(item.pipe(Readable.map((i) => i.text))),
 });
 ```
 
@@ -756,7 +753,6 @@ const labelId = yield* UniqueId.make("label");
 const inputId = yield* UniqueId.make("input");
 
 yield* $.div(
-  {},
   $.label({ id: labelId, htmlFor: inputId }, "Name"),
   $.input({ id: inputId, "aria-labelledby": labelId }),
 );

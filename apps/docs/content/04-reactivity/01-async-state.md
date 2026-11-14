@@ -84,7 +84,7 @@ when(userData.isLoading, {
 // Handle the value
 matchOption(userData.value, {
   onSome: (user) => UserCard({ user }),  // user is Readable<User>
-  onNone: () => $.span({}, "No data"),
+  onNone: () => $.span("No data"),
 });
 ```
 

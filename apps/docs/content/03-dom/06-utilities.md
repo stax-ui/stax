@@ -166,8 +166,7 @@ import { UniqueId } from "@stax-ui/dom";
 const labelId = yield* UniqueId.make("label");
 const inputId = yield* UniqueId.make("input");
 
-yield* $.div({},
-  $.label({ id: labelId, htmlFor: inputId }, "Name"),
+yield* $.div($.label({ id: labelId, htmlFor: inputId }, "Name"),
   $.input({ id: inputId, "aria-labelledby": labelId }),
 );
 ```

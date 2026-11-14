@@ -103,10 +103,10 @@ describe("Hydration", () => {
             cases: [
               {
                 pattern: "loading",
-                render: () => $.div({}, $.of("Loading...")),
+                render: () => $.div($.of("Loading...")),
               },
-              { pattern: "success", render: () => $.div({}, $.of("Success!")) },
-              { pattern: "error", render: () => $.div({}, $.of("Error!")) },
+              { pattern: "success", render: () => $.div($.of("Success!")) },
+              { pattern: "error", render: () => $.div($.of("Error!")) },
             ],
           });
         });
@@ -238,22 +238,21 @@ describe("Hydration", () => {
           const show2 = yield* Signal.make(false);
 
           return yield* $.div(
-            {},
             when(show1, {
-              onTrue: () => $.span({}, "First visible"),
-              onFalse: () => $.span({}, "First hidden"),
+              onTrue: () => $.span("First visible"),
+              onFalse: () => $.span("First hidden"),
             }),
             Boundary.suspense({
               render: () =>
                 Effect.gen(function* () {
                   yield* Effect.sleep(10);
-                  return yield* $.div({}, "Async content");
+                  return yield* $.div("Async content");
                 }),
-              fallback: () => $.div({}, "Loading..."),
+              fallback: () => $.div("Loading..."),
             }),
             when(show2, {
-              onTrue: () => $.span({}, "Second visible"),
-              onFalse: () => $.span({}, "Second hidden"),
+              onTrue: () => $.span("Second visible"),
+              onFalse: () => $.span("Second hidden"),
             }),
           );
         });
@@ -298,7 +297,7 @@ describe("Hydration", () => {
           return yield* each(items, {
             key: (l: { id: string; char: string }) => l.id,
             render: (l: Readable.Readable<{ id: string; char: string }>) =>
-              $.span({}, $.of(Readable.map(l, (v) => v.char))),
+              $.span($.of(Readable.map(l, (v) => v.char))),
             animate: {
               enterFrom: "opacity-0",
               enter: "opacity-100",
@@ -326,7 +325,7 @@ describe("Hydration", () => {
           return yield* each(items, {
             key: (l: { id: string; char: string }) => l.id,
             render: (l: Readable.Readable<{ id: string; char: string }>) =>
-              $.span({}, $.of(Readable.map(l, (v) => v.char))),
+              $.span($.of(Readable.map(l, (v) => v.char))),
             animate: {
               enterFrom: "opacity-0",
               enter: "opacity-100",
@@ -358,7 +357,7 @@ describe("Hydration", () => {
           const visible = yield* Signal.make(true);
           return yield* when(visible, {
             onTrue: () => $.div({ class: "hero" }, $.of("Hi")),
-            onFalse: () => $.div({}, $.of("")),
+            onFalse: () => $.div($.of("")),
             animate: {
               enterFrom: "opacity-0",
               enter: "opacity-100",
@@ -392,7 +391,7 @@ describe("Hydration", () => {
           return yield* each(itemsSignal, {
             key: (item: { id: string; text: string }) => item.id,
             render: (item: Readable.Readable<{ id: string; text: string }>) =>
-              $.li({}, $.of(Readable.map(item, (v) => v.text))),
+              $.li($.of(Readable.map(item, (v) => v.text))),
             container: () => $.ul({ class: "letters" }),
           });
         });
@@ -450,7 +449,7 @@ describe("Hydration", () => {
             each(itemsSignal, {
               key: (item: { id: string; text: string }) => item.id,
               render: (item: Readable.Readable<{ id: string; text: string }>) =>
-                $.p({}, $.of(Readable.map(item, (v) => v.text))),
+                $.p($.of(Readable.map(item, (v) => v.text))),
             }),
           );
         });
@@ -487,7 +486,7 @@ describe("Hydration", () => {
                 enter: "opacity-100",
               },
             },
-            () => $.h1({}, "Animated title"),
+            () => $.h1("Animated title"),
           ),
           $.p({ class: "sibling" }, "A sibling"),
         );

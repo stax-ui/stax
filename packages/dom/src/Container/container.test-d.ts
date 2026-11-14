@@ -81,7 +81,7 @@ type Ambient = Scope.Scope | RendererContext;
 // Pure leaf — all four axes inferred.
 // -----------------------------------------------------------------------------
 
-const Leaf = container((_props: LeafProps, children) => $.span({}, children));
+const Leaf = container((_props: LeafProps, children) => $.span(children));
 
 // All three call shapes succeed for a fully-optional-prop container.
 export const _leafNoArg = Leaf();
@@ -101,7 +101,7 @@ export type _LeafE = Expect<Equals<FailuresOf<typeof _leafText>, never>>;
 const Panel = container((_props: PanelProps, children) =>
   Effect.gen(function* () {
     yield* CollapsibleRootCtx;
-    return yield* $.div({}, children);
+    return yield* $.div(children);
   }),
 );
 
@@ -121,7 +121,7 @@ const PanelTwo = container((_props: PanelProps, children) =>
   Effect.gen(function* () {
     yield* CollapsibleRootCtx;
     yield* ToolbarCtx;
-    return yield* $.div({}, children);
+    return yield* $.div(children);
   }),
 );
 
@@ -141,7 +141,7 @@ const PanelFail = container((_props: PanelProps, children) =>
   Effect.gen(function* () {
     yield* CollapsibleRootCtx;
     if (Math.random() > 0.5) yield* Effect.fail(new Error("boom"));
-    return yield* $.div({}, children);
+    return yield* $.div(children);
   }),
 );
 
@@ -191,7 +191,7 @@ Progress("just a child");
 
 const Root = container.provides(CollapsibleRootCtx)(
   (props: RootProps, provide) =>
-    $.div({}, provide({ open: props.defaultOpen ?? false })),
+    $.div(provide({ open: props.defaultOpen ?? false })),
 );
 
 const _rootCall = Root({}, "x");
@@ -234,7 +234,6 @@ const MultiRoot = container.provides({
   toolbar: ToolbarCtx,
 })((props: RootProps, provide) =>
   $.div(
-    {},
     provide({
       root: { open: props.defaultOpen ?? false },
       toolbar: { orientation: "horizontal" },

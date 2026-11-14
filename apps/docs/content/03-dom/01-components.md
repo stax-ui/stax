@@ -16,7 +16,7 @@ Any function that returns an Element is a valid component:
 import { $ } from "@stax-ui/dom";
 
 const Greeting = (props: { name: string }) =>
-  $.h1({}, `Hello, ${props.name}!`);
+  $.h1(`Hello, ${props.name}!`);
 ```
 
 Call it like any other Element: `yield* Greeting({ name: "World" })`. This is the right shape for anything that doesn't take children — buttons, badges, stat tiles, form fields. The [todo app example](https://github.com/stax-ui/stax/tree/main/examples/todo-app) is built entirely out of plain functions like this.
@@ -31,9 +31,8 @@ const Counter = () =>
   Effect.gen(function* () {
     const count = yield* Signal.make(0);
 
-    return yield* $.div({},
-      $.button({ onClick: () => count.update((n) => n - 1) }, "-"),
-      $.span({}, count),
+    return yield* $.div($.button({ onClick: () => count.update((n) => n - 1) }, "-"),
+      $.span(count),
       $.button({ onClick: () => count.update((n) => n + 1) }, "+"),
     );
   });
@@ -49,7 +48,7 @@ A component that depends on context simply `yield*` the tag:
 const UserBadge = () =>
   Effect.gen(function* () {
     const user = yield* UserCtx;
-    return yield* $.span({}, user.name);
+    return yield* $.span(user.name);
   });
 ```
 
@@ -67,7 +66,7 @@ const Card = <E, R>(
   children: Element.Child<E, R>,
 ) =>
   $.div({ class: "card" },
-    $.h2({}, props.title),
+    $.h2(props.title),
     children,
   );
 ```
@@ -79,21 +78,21 @@ import { $, container } from "@stax-ui/dom";
 
 const Card = container((props: { title: string }, children) =>
   $.div({ class: "card" },
-    $.h2({}, props.title),
+    $.h2(props.title),
     children,
   ),
 );
 
 // Variadic children
 yield* Card({ title: "Hello" },
-  $.p({}, "Body text"),
-  $.p({}, "More body"),
+  $.p("Body text"),
+  $.p("More body"),
 );
 
 // Or the forwarded-array form
 yield* Card({ title: "Hello" }, [
-  $.p({}, "Body text"),
-  $.p({}, "More body"),
+  $.p("Body text"),
+  $.p("More body"),
 ]);
 ```
 
@@ -135,8 +134,7 @@ const Disclosure = container(
   (props: { title: string }, children) =>
     Effect.gen(function* () {
       const open = yield* Signal.make(false);
-      return yield* $.div({},
-        $.button({ onClick: () => open.update((v) => !v) }, props.title),
+      return yield* $.div($.button({ onClick: () => open.update((v) => !v) }, props.title),
         $.div({ hidden: Readable.map(open, (v) => !v) }, children),
       );
     }),
@@ -184,8 +182,7 @@ const AppRoot = container.provides({
   theme: ThemeCtx,
   size: SizeCtx,
 })((props: { color: string; scale: number }, provide) =>
-  $.div({},
-    provide({
+  $.div(provide({
       theme: { color: props.color },
       size: { scale: props.scale },
     }),

@@ -170,8 +170,8 @@ const UserCard = (userId: string) =>
     return $.div(
       { class: "user-card" },
       when(isLoaded, {
-        onTrue: () => $.p({}, Readable.map(data, (d) => d?.name ?? "")),
-        onFalse: () => $.p({}, "Loading..."),
+        onTrue: () => $.p(Readable.map(data, (d) => d?.name ?? "")),
+        onFalse: () => $.p("Loading..."),
       }),
     );
   });

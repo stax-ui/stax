@@ -155,14 +155,14 @@ const provideContextToChildren = <R>(
  *
  * Impl itself receives `(props, children)`. `children` is typed as the
  * opaque `Children<never, never>` so impl can pass them through (to
- * `$.div({}, children)`) without having to re-declare children's `E`
+ * `$.div(children)`) without having to re-declare children's `E`
  * and `R` as generics on impl — see {@link ContainerImpl}.
  *
  * When every prop is optional, three call shapes are allowed:
  *
  * ```ts
  * const Leaf = container(
- *   (props: { label?: string }, children) => $.span({}, children),
+ *   (props: { label?: string }, children) => $.span(children),
  * );
  *
  * Leaf();                       // no args

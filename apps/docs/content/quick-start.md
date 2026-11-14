@@ -91,8 +91,7 @@ const Home = Route.make("/").pipe(
     Effect.gen(function* () {
       const count = yield* Signal.make(0);
       return yield* $.div(
-        {},
-        $.h1({}, "Welcome to Stax"),
+        $.h1("Welcome to Stax"),
         $.button(
           { onClick: () => count.update((n) => n + 1) },
           count,
@@ -263,7 +262,6 @@ const DocsRoute = Route.make("/docs/:slug").pipe(
     // Render with loaded data
     render: (data) =>
       $.article(
-        {},
         data.content,
       ),
   }),

@@ -49,8 +49,7 @@ const EmailField = () =>
     const hasError = Readable.map(field.errors, (e) => e.length > 0);
 
     return yield* $.div(
-      {},
-      $.label({}, "Email"),
+      $.label("Email"),
       $.input({
         type: "email",
         value: field.value,

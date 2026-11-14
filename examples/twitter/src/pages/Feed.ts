@@ -33,7 +33,7 @@ const PostList = ({
         );
 
         return yield* matchOption(author, {
-          onNone: () => $.div({}, "Unknown author"),
+          onNone: () => $.div("Unknown author"),
           onSome: (author) => PostCard({ post, author }),
         });
       }),
@@ -76,7 +76,6 @@ export const FeedPage = (data: {
     );
 
     return yield* $.div(
-      {},
       $.h1({ class: "text-3xl font-bold mb-6" }, "Feed"),
       // New post form
       NewPostForm.provide(

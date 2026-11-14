@@ -54,7 +54,7 @@ export interface SuspenseOptions<N, E, R1, RF, RC> {
  * // Simple - show fallback immediately (using @stax-ui/dom)
  * Boundary.suspense({
  *   render: () => fetchAndRenderUser(userId),
- *   fallback: () => $.div({}, $.of("Loading...")),
+ *   fallback: () => $.div($.of("Loading...")),
  * })
  * ```
  *
@@ -66,7 +66,7 @@ export interface SuspenseOptions<N, E, R1, RF, RC> {
  *     const user = yield* fetchUser(userId)
  *     return yield* UserPage({ user })
  *   }),
- *   fallback: () => $.div({}, $.of("Loading user...")),
+ *   fallback: () => $.div($.of("Loading user...")),
  *   delay: "200 millis",
  * })
  * ```
@@ -111,7 +111,7 @@ export const suspense: {
  * // Using @stax-ui/dom
  * Boundary.error(
  *   () => riskyComponent(),
- *   (error) => $.div({}, $.of(`Something went wrong: ${String(error)}`))
+ *   (error) => $.div($.of(`Something went wrong: ${String(error)}`))
  * )
  * ```
  */
@@ -137,15 +137,15 @@ export const error = <N, E, R1 = never, R2 = never>(
  * // Suspense boundary for async loading (using @stax-ui/dom)
  * Boundary.suspense({
  *   render: () => fetchAndRenderData(),
- *   fallback: () => $.div({}, $.of("Loading...")),
- *   catch: (err) => $.div({}, $.of(`Error: ${err}`)),
+ *   fallback: () => $.div($.of("Loading...")),
+ *   catch: (err) => $.div($.of(`Error: ${err}`)),
  *   delay: "200 millis",
  * })
  *
  * // Error boundary for catching render errors
  * Boundary.error(
  *   () => riskyComponent(),
- *   (err) => $.div({}, $.of(`Oops: ${err}`))
+ *   (err) => $.div($.of(`Oops: ${err}`))
  * )
  * ```
  */

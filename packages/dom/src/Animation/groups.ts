@@ -15,17 +15,17 @@
  *       {},
  *       each(greetingLetters, {
  *         key: (l) => l.id,
- *         render: (l) => $.span({}, l.char),
+ *         render: (l) => $.span(l.char),
  *         animate: { enter: "letter-in", stagger: stagger(40), group: greeting },
  *       }),
  *       each(nameLetters, {
  *         key: (l) => l.id,
- *         render: (l) => $.span({}, l.char),
+ *         render: (l) => $.span(l.char),
  *         animate: { enter: "letter-in", stagger: stagger(40), group: name },
  *       }),
  *       each(taglineLetters, {
  *         key: (l) => l.id,
- *         render: (l) => $.span({}, l.char),
+ *         render: (l) => $.span(l.char),
  *         animate: { enter: "letter-in", stagger: stagger(40), group: tagline },
  *       }),
  *     );

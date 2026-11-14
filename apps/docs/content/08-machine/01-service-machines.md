@@ -157,8 +157,8 @@ const UserGreeting = () =>
       { class: Readable.map(isAuthed, (v) => (v ? "signed-in" : "signed-out")) },
       when(isAuthed, {
         onTrue: () =>
-          $.p({}, "Hello, ", Readable.map(user, (u) => u?.name ?? "")),
-        onFalse: () => $.p({}, "Please sign in."),
+          $.p("Hello, ", Readable.map(user, (u) => u?.name ?? "")),
+        onFalse: () => $.p("Please sign in."),
       }),
     );
   });

@@ -36,8 +36,8 @@ describe("Boundary", () => {
     it("should render content when no error", async () => {
       const el = await runTest(
         Boundary.error(
-          () => $.div({}, $.of("Success")),
-          () => $.div({}, $.of("Error occurred")),
+          () => $.div($.of("Success")),
+          () => $.div($.of("Error occurred")),
         ),
       );
 
@@ -60,9 +60,9 @@ describe("Boundary", () => {
           () =>
             Effect.gen(function* () {
               yield* Effect.fail(makeTestError("oops"));
-              return yield* $.div({}, $.of("Never reached"));
+              return yield* $.div($.of("Never reached"));
             }),
-          (error) => $.div({}, $.of(`Caught: ${error.message}`)),
+          (error) => $.div($.of(`Caught: ${error.message}`)),
         ),
       );
 
@@ -81,7 +81,6 @@ describe("Boundary", () => {
           const el = yield* Boundary.error(
             () =>
               $.div(
-                {},
                 when(broken, {
                   onTrue: () => Effect.die(new Error("subscription boom")),
                   onFalse: () => $.div({ class: "ok" }, "ok"),
@@ -117,16 +116,16 @@ describe("Boundary", () => {
       const el = await runTest(
         Effect.gen(function* () {
           // Create a parent container to hold the slot
-          const parent = yield* $.div({});
+          const parent = yield* $.div();
           document.body.appendChild(parent);
 
           const marker = yield* Boundary.suspense({
             render: () =>
               Effect.gen(function* () {
                 yield* Effect.sleep(20);
-                return yield* $.div({}, $.of("Loaded!"));
+                return yield* $.div($.of("Loaded!"));
               }),
-            fallback: () => $.div({}, $.of("Loading...")),
+            fallback: () => $.div($.of("Loading...")),
           });
 
           // Append the marker to the parent
@@ -152,7 +151,7 @@ describe("Boundary", () => {
       await runTest(
         Effect.gen(function* () {
           // Create a parent container to hold the slots
-          const parent = yield* $.div({});
+          const parent = yield* $.div();
           document.body.appendChild(parent);
 
           const outerMarker = yield* Boundary.suspense({
@@ -165,17 +164,17 @@ describe("Boundary", () => {
                   render: () =>
                     Effect.gen(function* () {
                       yield* Effect.sleep(100); // Longer delay for inner
-                      return yield* $.span({}, $.of("Inner Content"));
+                      return yield* $.span($.of("Inner Content"));
                     }),
-                  fallback: () => $.span({}, $.of("Inner Loading...")),
+                  fallback: () => $.span($.of("Inner Loading...")),
                 });
 
                 // Return a div containing the inner suspense
-                const container = yield* $.div({}, $.of("Outer: "));
+                const container = yield* $.div($.of("Outer: "));
                 container.appendChild(innerMarker);
                 return container;
               }),
-            fallback: () => $.div({}, $.of("Outer Loading...")),
+            fallback: () => $.div($.of("Outer Loading...")),
           });
 
           parent.appendChild(outerMarker);
@@ -201,7 +200,7 @@ describe("Boundary", () => {
     it("should handle sibling suspense boundaries independently", async () => {
       await runTest(
         Effect.gen(function* () {
-          const parent = yield* $.div({});
+          const parent = yield* $.div();
           document.body.appendChild(parent);
 
           // Create two sibling suspense boundaries with different timings
@@ -209,18 +208,18 @@ describe("Boundary", () => {
             render: () =>
               Effect.gen(function* () {
                 yield* Effect.sleep(30);
-                return yield* $.span({}, $.of("[First]"));
+                return yield* $.span($.of("[First]"));
               }),
-            fallback: () => $.span({}, $.of("[Loading1]")),
+            fallback: () => $.span($.of("[Loading1]")),
           });
 
           const marker2 = yield* Boundary.suspense({
             render: () =>
               Effect.gen(function* () {
                 yield* Effect.sleep(60);
-                return yield* $.span({}, $.of("[Second]"));
+                return yield* $.span($.of("[Second]"));
               }),
-            fallback: () => $.span({}, $.of("[Loading2]")),
+            fallback: () => $.span($.of("[Loading2]")),
           });
 
           parent.appendChild(marker1);

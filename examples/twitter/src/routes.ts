@@ -117,5 +117,5 @@ export const router = Router.empty.pipe(
   Router.concat(UserRoute),
   Router.layout(AppLayout),
   Router.fallback(() => NotFoundPage()),
-  Router.catchAll(() => $.div({}, $.of("Something went wrong"))),
+  Router.catchAll(() => $.div($.of("Something went wrong"))),
 );
