@@ -1,5 +1,60 @@
 # Changelog
 
+## 0.12.0
+
+### Minor Changes
+
+- ab4ea82: Add `container()` factory for components that accept children
+
+  `container(impl)` returns a factory that accepts the same
+  `(props, ...children)` and `(props, children[])` call shapes as the
+  `$.div` / `$.span` factories, and threads each child's `E` and `R`
+  into the output element automatically — so impl doesn't need generics
+  for children's error and requirement channels.
+
+  When every prop on impl is optional, three call shapes are allowed:
+
+  ```ts
+  const Leaf = container((props: { tone?: "soft" | "loud" }, children) =>
+    $.span(children),
+  );
+
+  Leaf(); // no args
+  Leaf("hello"); // children-only
+  Leaf({ tone: "loud" }, "hello");
+  ```
+
+  With at least one required prop, the no-args / children-only
+  overloads disappear and TypeScript demands the props object.
+
+  `container.provides(Tag)` builds a container that **supplies** a
+  service to its children instead of reading one. Impl receives a
+  `provide(service)` closure that scopes the container's children under
+  the Tag; the Tag's Identifier appears in the factory's `Provides`
+  slot so it cancels against children's R via `Exclude`. A record form,
+  `container.provides({ label: Tag, ... })`, provides multiple
+  services in one go.
+
+  The name `container` was picked over the earlier `component` to
+  match what the factory actually does: it exists specifically for
+  components that accept children. Plain functions returning Elements
+  remain the right shape for components that don't.
+
+- 9a51962: Export `Element.splitArgs` and `Element.isAttrsObject`
+
+  Component authors who want their components to accept the same
+  `(attrs?, ...children)` / `(attrs?, children[])` call shapes as the
+  `$` factories now get the exact same runtime disambiguation rule
+  instead of having to reproduce it. Reusing it is also the only way a
+  user component and a `$` factory can read a given call the same way,
+  and if stax later adds a new kind of child it propagates everywhere
+  automatically.
+
+  `splitArgs` returns `attrs: undefined` (not `{}`) when no attrs were
+  passed, so a component author can tell "no props" from "empty props".
+  The `$` factories themselves default the undefined through at their
+  own call site, so their observable behavior is unchanged.
+
 ## 0.11.1
 
 ### Patch Changes
