@@ -44,8 +44,8 @@ const UserDetailPage = ({
       $.h1({ class: "text-3xl font-bold" }, user.name),
       $.div(
         { class: "bg-white p-4 rounded shadow" },
-        $.p({}, $.span({ class: "font-semibold" }, "ID: "), String(user.id)),
-        $.p({}, $.span({ class: "font-semibold" }, "Email: "), user.email),
+        $.p($.span({ class: "font-semibold" }, "ID: "), String(user.id)),
+        $.p($.span({ class: "font-semibold" }, "Email: "), user.email),
       ),
       Link(
         { href: "/users", class: "text-blue-600 hover:underline" },

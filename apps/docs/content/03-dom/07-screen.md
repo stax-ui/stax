@@ -32,7 +32,6 @@ const Card = () =>
   Effect.gen(function* () {
     const isMobile = yield* Screen.match("(max-width: 767px)");
     return yield* $.div(
-      {},
       when(isMobile, {
         onTrue: () => MobileCard(),
         onFalse: () => DesktopCard(),
@@ -71,7 +70,7 @@ For purely visual differences — hide at mobile, different padding, swap an ico
 
 ```typescript
 // Display the viewport width live in a text node
-yield* $.p({}, Readable.map(Screen.width, (w) => `${w}px wide`));
+yield* $.p(Readable.map(Screen.width, (w) => `${w}px wide`));
 ```
 
 On SSR both return `0`.

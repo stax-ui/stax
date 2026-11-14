@@ -22,7 +22,7 @@ mount(UserProfile(), document.body); // Type error!
 mount(
   Boundary.error(
     () => UserProfile(),
-    (error) => $.div({}, `Failed to load: ${error.message}`),
+    (error) => $.div(`Failed to load: ${error.message}`),
   ),
   document.body,
 ); // Compiles
@@ -39,7 +39,7 @@ const Counter = () =>
   Effect.gen(function* () {
     const count = yield* Signal.make(0);
     console.log("setup"); // Logs once, on mount
-    return yield* $.div({}, count); // count changes update only this text node
+    return yield* $.div(count); // count changes update only this text node
   });
 ```
 
@@ -117,9 +117,8 @@ const Counter = () =>
     const count = yield* Signal.make(0);
 
     return yield* $.div(
-      {},
       $.button({ onClick: () => count.update((n) => n - 1) }, "-"),
-      $.span({}, count),
+      $.span(count),
       $.button({ onClick: () => count.update((n) => n + 1) }, "+"),
     );
   });
@@ -188,7 +187,7 @@ each(todos, {
 // Option matching
 matchOption(maybeUser, {
   onSome: (user) => UserCard({ user }),
-  onNone: () => $.span({}, "No user"),
+  onNone: () => $.span("No user"),
 });
 ```
 
@@ -218,7 +217,7 @@ const router = Router.empty.pipe(
 );
 
 // Render the matched route
-$.main({}, Outlet({ router }));
+$.main(Outlet({ router }));
 
 // Navigate with type-safe links
 Link({ href: "/users/alice" }, "Alice's Profile");
@@ -402,8 +401,8 @@ Stax uses function calls instead of JSX:
 // Stax
 $.div(
   { class: "container" },
-  $.h1({}, "Hello"),
-  $.p({}, count),
+  $.h1("Hello"),
+  $.p(count),
 )
 ```
 

@@ -24,8 +24,8 @@
  *     return $.div(
  *       { class: isAuthed.map((v) => (v ? "signed-in" : "signed-out")) },
  *       when(isAuthed, {
- *         true: () => $.p({}, "Hello, ", user.map((u) => u?.name ?? "")),
- *         false: () => $.p({}, "Please sign in."),
+ *         true: () => $.p("Hello, ", user.map((u) => u?.name ?? "")),
+ *         false: () => $.p("Please sign in."),
  *       }),
  *     );
  *   });

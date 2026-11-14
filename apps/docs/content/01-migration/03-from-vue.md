@@ -26,7 +26,7 @@ mount(UserProfile(), document.body); // Type error!
 mount(
   Boundary.error(
     () => UserProfile(),
-    (error) => $.div({}, `Failed to load: ${error.message}`),
+    (error) => $.div(`Failed to load: ${error.message}`),
   ),
   document.body,
 ); // Compiles
@@ -50,7 +50,7 @@ const doubled = computed(() => count.value * 2);
 // Stax: Only the text node updates
 const count = yield* Signal.make(0);
 const doubled = Readable.map(count, (c) => c * 2);
-// $.span({}, doubled) — only this span's text updates
+// $.span(doubled) — only this span's text updates
 ```
 
 ### No Template Compilation
@@ -69,7 +69,7 @@ Vue uses a custom template syntax that compiles to render functions. Stax uses p
 // Stax
 $.div(
   { class: "card" },
-  $.h1({}, title),
+  $.h1(title),
   $.button({ onClick: handleClick }, "Submit"),
 )
 ```
@@ -110,8 +110,8 @@ Boundary.suspense({
       const user = yield* fetchUser(id); // Can fail!
       return yield* UserProfile({ user });
     }),
-  fallback: () => $.div({}, "Loading..."),
-  catch: (error) => $.div({}, `Error: ${error.message}`),
+  fallback: () => $.div("Loading..."),
+  catch: (error) => $.div(`Error: ${error.message}`),
   delay: "200 millis", // Avoid loading flash
 });
 
@@ -120,9 +120,8 @@ const userData = yield* AsyncReadable.make(() => fetchUser(id));
 
 // AsyncReadable has separate Readables for fine-grained reactivity
 $.div(
-  {},
   when(userData.isLoading, {
-    onTrue: () => $.div({}, "Loading..."),
+    onTrue: () => $.div("Loading..."),
     onFalse: () => $.span(),
   }),
   matchOption(userData.value, {
@@ -212,7 +211,7 @@ const Cart = (props: { items: Readable.Readable<Item[]> }) =>
     const total = Readable.map(props.items, (items) =>
       items.reduce((sum, i) => sum + i.price, 0),
     );
-    return yield* $.div({}, t`Total: $${total}`);
+    return yield* $.div(t`Total: $${total}`);
   });
 ```
 
@@ -265,7 +264,7 @@ const TodoList = (props: { todos: Readable.Readable<Todo[]> }) =>
     container: () => $.ul(),
     key: (todo) => todo.id,
     render: (todo) =>
-      $.li({}, Readable.map(todo, (t) => t.text)),
+      $.li(Readable.map(todo, (t) => t.text)),
   });
 ```
 
@@ -311,7 +310,7 @@ const DocumentTitle = (props: {
       Effect.sync(() => localStorage.setItem("lastTitle", title)),
     );
 
-    return yield* $.h1({}, props.title);
+    return yield* $.h1(props.title);
   });
 ```
 
@@ -377,12 +376,11 @@ const TextInput = () =>
   Effect.gen(function* () {
     const text = yield* Signal.make("");
     return yield* $.div(
-      {},
       $.input({
         value: text,
         onInput: (e) => text.set((e.target as HTMLInputElement).value),
       }),
-      $.p({}, t`You typed: ${text}`),
+      $.p(t`You typed: ${text}`),
     );
   });
 ```

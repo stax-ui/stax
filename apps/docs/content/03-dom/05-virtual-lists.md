@@ -18,7 +18,7 @@ virtualEach(items, {
   itemHeight: 48,
   height: 400,
   render: (item) =>
-    $.li({}, item.pipe(Readable.map((i) => i.text))),
+    $.li(item.pipe(Readable.map((i) => i.text))),
 });
 ```
 

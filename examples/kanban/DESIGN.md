@@ -209,7 +209,7 @@ const CardComponent = (props: { card: Readable<Card> }) =>
         $.h3({ class: "font-medium" }, title),
         when(Readable.map(priority, (p) => p !== null), {
           onTrue: () => PriorityBadge({ priority }),
-          onFalse: () => $.span({}, ""),
+          onFalse: () => $.span(""),
         }),
       ),
     );
@@ -482,7 +482,7 @@ const CardDetailDialog = () =>
           key: (c) => (c ? Effect.runSync(c.id.get) : "none"),
           render: () => CardEditFormContent({ handleClose, handleDelete }),
         }),
-      onFalse: () => $.span({}, $.of("")),
+      onFalse: () => $.span($.of("")),
     });
   });
 
@@ -493,7 +493,7 @@ const CardEditFormContent = (props: {
   Effect.gen(function* () {
     const kanban = yield* KanbanService;
     const card = yield* kanban.selectedCard.get;
-    if (!card) return yield* $.span({}, $.of(""));
+    if (!card) return yield* $.span($.of(""));
 
     // Read current card values for form defaults
     const currentTitle = yield* card.title.get;
@@ -548,7 +548,7 @@ const CardEditFormContent = (props: {
                 when(hasError, {
                   onTrue: () =>
                     $.span({ class: "label-text-alt text-error mt-1" }, "Title is required"),
-                  onFalse: () => $.span({}, ""),
+                  onFalse: () => $.span(""),
                 }),
               );
             }),

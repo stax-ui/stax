@@ -20,11 +20,11 @@ const name = yield* Signal.make("world");
 
 // Use a signal directly as element content —
 // the text node updates when name changes.
-const greeting = yield* $.h1({}, name);
+const greeting = yield* $.h1(name);
 
 // Derived values update automatically.
 const upper = Readable.map(name, (n) => n.toUpperCase());
-const shout = yield* $.p({}, upper);`;
+const shout = yield* $.p(upper);`;
 
 export const errorsExample = `// This component can fail — the error type says so.
 const UserProfile = 
@@ -32,7 +32,7 @@ const UserProfile =
     Effect.gen(function* () {
       const api = yield* ApiClient;
       const user = yield* api.getUser(id);
-      return yield* $.div({}, user.name);
+      return yield* $.div(user.name);
     });
 
 // TypeScript won't let you mount this without
@@ -77,7 +77,7 @@ const Greeting = (props: { name: string }) =>
   Effect.gen(function* () {
     const count = yield* Signal.make(0);
     return yield* $.div(
-      $.h1({}, \`Hello, \${props.name}!\`),
+      $.h1(\`Hello, \${props.name}!\`),
       $.button(
         { onClick: () => count.update((n) => n + 1) },
         count,

@@ -14,8 +14,8 @@ The `$` namespace is your entry point for creating DOM elements. Every element f
 import { $ } from "@stax-ui/dom";
 
 yield* $.div({ class: "container" },
-  $.h1({}, "Hello"),
-  $.p({}, "Welcome to Stax"),
+  $.h1("Hello"),
+  $.p("Welcome to Stax"),
 );
 ```
 
@@ -27,23 +27,22 @@ Pass children directly as arguments after the attributes object. Strings, number
 
 ```typescript
 // Single string child
-yield* $.h1({}, "Hello World");
+yield* $.h1("Hello World");
 
 // Multiple children of mixed types
-yield* $.div({},
-  "Hello",
-  $.span({}, "World"),
+yield* $.div("Hello",
+  $.span("World"),
 );
 
 // Empty child (renders nothing)
-yield* $.div({}, $.empty);
+yield* $.div($.empty);
 ```
 
 When you pass a Readable as a child, the text updates automatically when the value changes:
 
 ```typescript
 const count = yield* Signal.make(0);
-yield* $.span({}, count);  // Updates in place when count changes
+yield* $.span(count);  // Updates in place when count changes
 ```
 
 ### Template Strings
@@ -57,7 +56,7 @@ const name = yield* Signal.make("World");
 const count = yield* Signal.make(0);
 
 // Creates a Readable<string> that updates automatically
-yield* $.p({}, t`Hello, ${name}! Count: ${count}`);
+yield* $.p(t`Hello, ${name}! Count: ${count}`);
 ```
 
 ## Attributes

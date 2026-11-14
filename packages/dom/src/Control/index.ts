@@ -348,7 +348,7 @@ export const redraw = <
  *           },
  *           intro: true,
  *         },
- *         () => $.span({}, "Hello,"),
+ *         () => $.span("Hello,"),
  *       ),
  *       animated(
  *         // No visual animation — the span has its own CSS keyframes; the
@@ -365,7 +365,7 @@ export const redraw = <
  *           },
  *           intro: true,
  *         },
- *         () => $.span({}, "Welcome."),
+ *         () => $.span("Welcome."),
  *       ),
  *     );
  *   });

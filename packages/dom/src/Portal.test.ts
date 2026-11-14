@@ -160,11 +160,7 @@ describe("Portal", () => {
           { id: "modal" },
           $.div({ class: "modal-header" }, "Title"),
           $.div({ class: "modal-body" }, "Content"),
-          $.div(
-            { class: "modal-footer" },
-            $.button({}, "Cancel"),
-            $.button({}, "OK"),
-          ),
+          $.div({ class: "modal-footer" }, $.button("Cancel"), $.button("OK")),
         ),
       );
     });

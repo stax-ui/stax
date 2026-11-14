@@ -159,8 +159,8 @@ import { router } from "./routes.js";
 export const App = () =>
   $.div(
     { class: "app" },
-    $.nav({}, Link({ href: "/" }, "Home")),
-    $.main({}, Outlet({ router })),
+    $.nav(Link({ href: "/" }, "Home")),
+    $.main(Outlet({ router })),
   );
 ```
 

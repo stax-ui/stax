@@ -226,7 +226,7 @@ when(userData.isLoading, {
 // Handle the value (matchOption unwraps Option for you)
 matchOption(userData.value, {
   onSome: (user) => UserCard({ user }),  // user is Readable<User>
-  onNone: () => $.span({}, $.of("No data")),
+  onNone: () => $.span($.of("No data")),
 });
 ```
 
@@ -586,7 +586,7 @@ match(status.current, {
     { pattern: "loading", render: () => LoadingSpinner() },
     { pattern: "error", render: () => ErrorView() },
   ],
-  fallback: () => $.div({}, $.of("Unknown state")),
+  fallback: () => $.div($.of("Unknown state")),
 });
 ```
 
@@ -599,7 +599,7 @@ import { matchOption, matchEither } from "@stax-ui/core";
 
 matchOption(userData.value, {
   onSome: (user) => UserCard({ user }),  // user is Readable<User>
-  onNone: () => $.span({}, $.of("No data")),
+  onNone: () => $.span($.of("No data")),
 });
 
 matchEither(result, {

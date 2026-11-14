@@ -57,7 +57,7 @@ export const Card = (props: { card: Readable.Readable<CardType> }) =>
               {
                 onTrue: () =>
                   $.div({ class: "mt-2" }, PriorityBadge({ priority })),
-                onFalse: () => $.span({}, ""),
+                onFalse: () => $.span(""),
               },
             ),
           ),

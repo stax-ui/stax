@@ -28,12 +28,11 @@ Pass content as arguments:
 
 ```typescript
 // Text content
-$.h1({}, "My Todo App")
+$.h1("My Todo App")
 
 // Multiple children
-$.div({},
-  $.h1({}, "My Todo App"),
-  $.p({}, "A simple todo list"),
+$.div($.h1("My Todo App"),
+  $.p("A simple todo list"),
 )
 ```
 
@@ -50,8 +49,8 @@ $.button({ class: "btn-primary" }, "Add Todo")
 
 // Attributes + children
 $.div({ class: "container" },
-  $.h1({}, "My Todo App"),
-  $.p({}, "A simple todo list"),
+  $.h1("My Todo App"),
+  $.p("A simple todo list"),
 )
 ```
 
@@ -74,7 +73,7 @@ if (!container) throw new Error("Root element not found");
 const App = () => $.div({ class: "todo-app" },
   // Header
   $.header({ class: "header" },
-    $.h1({}, "todos"),
+    $.h1("todos"),
     $.input({
       class: "new-todo",
       placeholder: "What needs to be done?",
@@ -177,7 +176,7 @@ Notice how elements nest naturally:
 ```typescript
 $.div({ class: "parent" },
   $.div({ class: "child" },
-    $.span({}, "Deeply nested content"),
+    $.span("Deeply nested content"),
   ),
 )
 ```

@@ -38,7 +38,7 @@ const Card = <E = never, R = never>(
   props: { title: string },
   body: Element.Element<HTMLElement | SVGElement, E, R>,
 ): Element.Element<HTMLDivElement, E, R> =>
-  $.div({ class: "card" }, $.h2({}, props.title), body);
+  $.div({ class: "card" }, $.h2(props.title), body);
 
 // Type at the call site is exactly Element<HTMLDivElement, HttpError, ApiClient>.
 const _cardOut = Card({ title: "User" }, apiChild);
@@ -136,9 +136,9 @@ const Layout = <
 > =>
   $.div(
     { class: "layout" },
-    $.nav({}, props.nav),
-    $.main({}, props.main),
-    props.footer && $.footer({}, props.footer),
+    $.nav(props.nav),
+    $.main(props.main),
+    props.footer && $.footer(props.footer),
   );
 
 // Distinct services on nav (ApiClient) and main (DbClient) — both flow.

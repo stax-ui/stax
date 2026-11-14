@@ -21,10 +21,10 @@ import type { ChildNode } from "./Element/types.js";
  * import { $ } from "@stax-ui/dom"
  *
  * // Before:
- * $.div({}, collect($.of("Hello"), $.span({}, $.of("World"))))
+ * $.div(collect($.of("Hello"), $.span($.of("World"))))
  *
  * // After:
- * $.div({}, "Hello", $.span({}, "World"))
+ * $.div("Hello", $.span("World"))
  * ```
  */
 export const collect = <

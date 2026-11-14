@@ -32,7 +32,7 @@ describe("Element.bindVisible", () => {
         Effect.scoped(
           Effect.gen(function* () {
             const open = yield* Signal.make(true);
-            const el = yield* $.div({}, "hello").pipe(bindVisible(open));
+            const el = yield* $.div("hello").pipe(bindVisible(open));
             return {
               hidden: el.hasAttribute("hidden"),
               display: el.style.getPropertyValue("display"),
@@ -49,7 +49,7 @@ describe("Element.bindVisible", () => {
         Effect.scoped(
           Effect.gen(function* () {
             const open = yield* Signal.make(false);
-            const el = yield* $.div({}, "hello").pipe(bindVisible(open));
+            const el = yield* $.div("hello").pipe(bindVisible(open));
             return {
               hidden: el.hasAttribute("hidden"),
               hiddenValue: el.getAttribute("hidden"),
@@ -70,7 +70,7 @@ describe("Element.bindVisible", () => {
         Effect.scoped(
           Effect.gen(function* () {
             const open = yield* Signal.make(false);
-            const el = yield* $.div({}, "hello").pipe(
+            const el = yield* $.div("hello").pipe(
               bindVisible(open, { hiddenValue: "until-found" }),
             );
             return el.getAttribute("hidden");
@@ -89,7 +89,7 @@ describe("Element.bindVisible", () => {
         Effect.scoped(
           Effect.gen(function* () {
             const open = yield* Signal.make(false);
-            const el = yield* $.div({}, "hello").pipe(
+            const el = yield* $.div("hello").pipe(
               bindVisible(open, { hiddenValue: "until-found" }),
             );
             return {
@@ -111,7 +111,7 @@ describe("Element.bindVisible", () => {
         Effect.scoped(
           Effect.gen(function* () {
             const open = yield* Signal.make(false);
-            const el = yield* $.div({}, "hello").pipe(
+            const el = yield* $.div("hello").pipe(
               bindVisible(open, {
                 hiddenValue: "until-found",
                 manageDisplay: true,
@@ -135,7 +135,7 @@ describe("Element.bindVisible", () => {
         Effect.scoped(
           Effect.gen(function* () {
             const open = yield* Signal.make(false);
-            const el = yield* $.div({}, "hello").pipe(
+            const el = yield* $.div("hello").pipe(
               bindVisible(open, { manageDisplay: false }),
             );
             return {
@@ -157,7 +157,7 @@ describe("Element.bindVisible", () => {
           Effect.gen(function* () {
             const open = yield* Signal.make(false);
             return yield* renderToString(
-              $.div({}, "hello").pipe(bindVisible(open)),
+              $.div("hello").pipe(bindVisible(open)),
             );
           }),
         ),
@@ -172,7 +172,7 @@ describe("Element.bindVisible", () => {
           Effect.gen(function* () {
             const open = yield* Signal.make(true);
             return yield* renderToString(
-              $.div({}, "hello").pipe(bindVisible(open)),
+              $.div("hello").pipe(bindVisible(open)),
             );
           }),
         ),
@@ -187,7 +187,7 @@ describe("Element.bindVisible", () => {
           Effect.gen(function* () {
             const open = yield* Signal.make(false);
             return yield* renderToString(
-              $.div({}, "hello").pipe(
+              $.div("hello").pipe(
                 bindVisible(open, { hiddenValue: "until-found" }),
               ),
             );
@@ -210,7 +210,7 @@ describe("Element.bindVisible", () => {
         Effect.scoped(
           Effect.gen(function* () {
             const open = yield* Signal.make(true);
-            const el = yield* $.div({}, "hello").pipe(bindVisible(open));
+            const el = yield* $.div("hello").pipe(bindVisible(open));
             document.body.appendChild(el);
             // Let the forked subscription attach before firing the
             // first change.
@@ -241,7 +241,7 @@ describe("Element.bindVisible", () => {
         Effect.scoped(
           Effect.gen(function* () {
             const open = yield* Signal.make(true);
-            const el = yield* $.div({}, "hi").pipe(
+            const el = yield* $.div("hi").pipe(
               bindVisible(open, {
                 animate: {
                   exit: "exiting",
@@ -277,7 +277,7 @@ describe("Element.bindVisible", () => {
         Effect.scoped(
           Effect.gen(function* () {
             const open = yield* Signal.make(true);
-            const el = yield* $.div({}, "hi").pipe(bindVisible(open));
+            const el = yield* $.div("hi").pipe(bindVisible(open));
             document.body.appendChild(el);
             yield* Effect.sleep("10 millis");
 
@@ -311,7 +311,7 @@ describe("Element.bindVisible", () => {
         Effect.scoped(
           Effect.gen(function* () {
             const open = yield* Signal.make(false);
-            const el = yield* $.div({}, "hi").pipe(
+            const el = yield* $.div("hi").pipe(
               bindVisible(open, {
                 hiddenValue: "until-found",
                 animate: {

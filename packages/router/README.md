@@ -26,26 +26,24 @@ import { Route, Router, Navigation, Link, Outlet } from "@stax-ui/router";
 
 // Define routes
 const HomeRoute = Route.make("/").pipe(
-  Route.render(() => $.div({}, $.of("Welcome home!"))),
+  Route.render(() => $.div($.of("Welcome home!"))),
 );
 
 const AboutRoute = Route.make("/about").pipe(
-  Route.render(() => $.div({}, $.of("About us"))),
+  Route.render(() => $.div($.of("About us"))),
 );
 
 // Compose router
 const router = Router.empty.pipe(
   Router.concat(HomeRoute),
   Router.concat(AboutRoute),
-  Router.fallback(() => $.div({}, "Not found")),
+  Router.fallback(() => $.div("Not found")),
 );
 
 // App component with navigation
 const App = () =>
   $.div(
-    {},
     $.nav(
-      {},
       Link({ href: "/" }, "Home"),
       Link({ href: "/about" }, "About"),
     ),
@@ -214,7 +212,7 @@ const DashboardRoute = Route.make("/dashboard").pipe(
 const AdminRoute = Route.make("/admin").pipe(
   Route.render(() => AdminPanel()),
   Route.withGuard(isAdmin, {
-    fallback: () => $.div({}, $.of("Access denied")),
+    fallback: () => $.div($.of("Access denied")),
   }),
 );
 ```
@@ -262,7 +260,7 @@ Load route modules on demand:
 
 ```ts
 const AdminRoute = Route.lazy("/admin", () => import("./admin/AdminPage"), {
-  fallback: () => $.div({}, $.of("Loading...")),
+  fallback: () => $.div($.of("Loading...")),
 });
 ```
 
@@ -345,7 +343,7 @@ Wrap routes with a layout component. Layouts are applied inside-out:
 ```ts
 const AppLayout = <A extends HTMLElement | SVGElement, E, R>(
   children: Element.Element<A, E, R>,
-) => $.div({ class: "app" }, Navbar(), $.main({}, children));
+) => $.div({ class: "app" }, Navbar(), $.main(children));
 
 const SidebarLayout = <A extends HTMLElement | SVGElement, E, R>(
   children: Element.Element<A, E, R>,
@@ -370,7 +368,7 @@ const router = Router.empty.pipe(
   Router.concat(UserRoute),
   Router.catchTag("NotFound", () => NotFoundPage()),
   Router.catchTag("Unauthorized", () => LoginPage()),
-  Router.catchAll((error) => $.div({}, $.of("Something went wrong"))),
+  Router.catchAll((error) => $.div($.of("Something went wrong"))),
 );
 ```
 
@@ -392,9 +390,8 @@ import { Outlet } from "@stax-ui/router";
 
 const App = () =>
   $.div(
-    {},
     Navbar(),
-    $.main({}, Outlet({ router })),
+    $.main(Outlet({ router })),
   );
 ```
 

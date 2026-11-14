@@ -167,7 +167,7 @@ const App = () =>
   $.div(
     { class: "app" },
     Header(),
-    $.main({}, Outlet({ router })),
+    $.main(Outlet({ router })),
     Footer(),
   );
 ```

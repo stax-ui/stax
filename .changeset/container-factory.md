@@ -15,7 +15,7 @@ When every prop on impl is optional, three call shapes are allowed:
 ```ts
 const Leaf = container(
   (props: { tone?: "soft" | "loud" }, children) =>
-    $.span({}, children),
+    $.span(children),
 );
 
 Leaf();                     // no args

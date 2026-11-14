@@ -22,7 +22,7 @@ mount(UserProfile(), document.body); // Type error!
 mount(
   Boundary.error(
     () => UserProfile(),
-    (error) => $.div({}, `Failed to load: ${error.message}`),
+    (error) => $.div(`Failed to load: ${error.message}`),
   ),
   document.body,
 ); // Compiles
@@ -94,8 +94,8 @@ Boundary.suspense({
       const user = yield* fetchUser(id);
       return yield* UserProfile({ user });
     }),
-  fallback: () => $.div({}, "Loading..."),
-  catch: (error) => $.div({}, `Error: ${error.message}`),
+  fallback: () => $.div("Loading..."),
+  catch: (error) => $.div(`Error: ${error.message}`),
   delay: "200 millis", // Avoid loading flash — Svelte can't do this
 });
 
@@ -104,9 +104,8 @@ const userData = yield* AsyncReadable.make(() => fetchUser(id));
 
 // AsyncReadable has separate Readables for fine-grained reactivity
 $.div(
-  {},
   when(userData.isLoading, {
-    onTrue: () => $.div({}, "Loading..."),
+    onTrue: () => $.div("Loading..."),
     onFalse: () => $.span(),
   }),
   matchOption(userData.value, {
@@ -224,7 +223,7 @@ const Cart = (props: { items: Readable.Readable<Item[]> }) =>
     const total = Readable.map(props.items, (items) =>
       items.reduce((sum, i) => sum + i.price, 0),
     );
-    return yield* $.div({}, t`Total: $${total}`);
+    return yield* $.div(t`Total: $${total}`);
   });
 ```
 
@@ -274,7 +273,7 @@ const TodoList = (props: { todos: Readable.Readable<Todo[]> }) =>
     container: () => $.ul(),
     key: (todo) => todo.id,
     render: (todo) =>
-      $.li({}, Readable.map(todo, (t) => t.text)),
+      $.li(Readable.map(todo, (t) => t.text)),
   });
 ```
 
@@ -327,7 +326,7 @@ const DocumentTitle = (props: {
       Effect.sync(() => localStorage.setItem("lastTitle", title)),
     );
 
-    return yield* $.h1({}, props.title);
+    return yield* $.h1(props.title);
   });
 ```
 
@@ -387,12 +386,11 @@ const TextInput = () =>
   Effect.gen(function* () {
     const text = yield* Signal.make("");
     return yield* $.div(
-      {},
       $.input({
         value: text,
         onInput: (e) => text.set((e.target as HTMLInputElement).value),
       }),
-      $.p({}, t`You typed: ${text}`),
+      $.p(t`You typed: ${text}`),
     );
   });
 ```
@@ -420,9 +418,8 @@ const Counter = () =>
     const doubled = Readable.map(count, (c) => c * 2);
 
     return yield* $.div(
-      {},
       $.button({ onClick: () => count.update((c) => c + 1) }, count),
-      $.p({}, t`Doubled: ${doubled}`),
+      $.p(t`Doubled: ${doubled}`),
     );
   });
 ```
@@ -457,8 +454,8 @@ const Card = <E, R>(props: {
 
 // Usage
 Card({
-  header: $.h1({}, "Title"),
-  children: $.p({}, "Card content"),
+  header: $.h1("Title"),
+  children: $.p("Card content"),
 });
 ```
 
@@ -483,8 +480,8 @@ Boundary.suspense({
       const user = yield* fetchUser(id);
       return yield* UserProfile({ user });
     }),
-  fallback: () => $.p({}, "Loading..."),
-  catch: (e) => $.p({}, `Error: ${e}`),
+  fallback: () => $.p("Loading..."),
+  catch: (e) => $.p(`Error: ${e}`),
 });
 ```
 
@@ -536,7 +533,7 @@ Svelte has built-in transition directives. Stax uses CSS-first animations:
 ```ts
 // Stax
 when(visible, {
-  onTrue: () => $.div({}, "Fading content"),
+  onTrue: () => $.div("Fading content"),
   onFalse: () => $.span(),
   animate: {
     enter: "fade-in",  // CSS class

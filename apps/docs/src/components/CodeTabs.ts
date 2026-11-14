@@ -20,7 +20,7 @@ export const CodeTabs = (props: {
   readonly class?: string;
 }) =>
   Effect.gen(function* () {
-    if (props.files.length === 0) return yield* $.div({});
+    if (props.files.length === 0) return yield* $.div();
 
     const active = yield* Signal.make(props.files[0].filename);
 

@@ -39,7 +39,7 @@ const childA: Element.Element<HTMLSpanElement, ErrA, ServiceA> = Effect.gen(
   function* () {
     yield* ServiceA;
     if (Math.random() < 0) yield* Effect.fail(new ErrA());
-    return yield* $.span({}, "a");
+    return yield* $.span("a");
   },
 );
 
@@ -47,7 +47,7 @@ const childB: Element.Element<HTMLParagraphElement, ErrB, ServiceB> =
   Effect.gen(function* () {
     yield* ServiceB;
     if (Math.random() < 0) yield* Effect.fail(new ErrB());
-    return yield* $.p({}, "b");
+    return yield* $.p("b");
   });
 
 // Attrs + variadic children. E should be ErrA | ErrB, R should include
@@ -73,7 +73,7 @@ const _proof2: Element.Element<
 // Single-level array with mixed types — union propagates across the array
 // element union. Nested arrays are intentionally NOT part of ChildInput
 // (they'd re-introduce the TS2589 depth issue for component wrappers).
-const combined3 = $.div({}, [childA, childB, "flat"]);
+const combined3 = $.div([childA, childB, "flat"]);
 const _proof3: Element.Element<
   HTMLDivElement,
   ErrA | ErrB,

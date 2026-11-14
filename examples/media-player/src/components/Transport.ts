@@ -77,8 +77,8 @@ export const Transport = () =>
         // Time display
         $.div(
           { class: "flex justify-between font-mono text-sm opacity-70" },
-          $.span({}, Readable.map(position, formatTime)),
-          $.span({}, Readable.map(duration, formatTime)),
+          $.span(Readable.map(position, formatTime)),
+          $.span(Readable.map(duration, formatTime)),
         ),
 
         // Transport buttons

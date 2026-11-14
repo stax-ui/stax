@@ -39,7 +39,7 @@
  *
  * @example Reading the viewport width reactively:
  * ```ts
- * yield* $.p({}, Readable.map(Screen.width, (w) => `${w}px wide`))
+ * yield* $.p(Readable.map(Screen.width, (w) => `${w}px wide`))
  * ```
  */
 

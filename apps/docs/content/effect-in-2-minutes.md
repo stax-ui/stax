@@ -181,9 +181,8 @@ const Counter = () =>
     const count = yield* Signal.make(0);
 
     return yield* $.div(
-      {},
       $.button({ onClick: () => count.update(n => n - 1) }, "-"),
-      $.span({}, count),
+      $.span(count),
       $.button({ onClick: () => count.update(n => n + 1) }, "+"),
     );
   });

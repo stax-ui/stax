@@ -76,7 +76,7 @@ export interface SuspenseOptions<N extends DOMElement, E, R1, RF, RC> {
  * // Simple - show fallback immediately
  * Boundary.suspense({
  *   render: () => fetchAndRenderUser(userId),
- *   fallback: () => $.div({}, $.of("Loading...")),
+ *   fallback: () => $.div($.of("Loading...")),
  * })
  * ```
  *
@@ -88,7 +88,7 @@ export interface SuspenseOptions<N extends DOMElement, E, R1, RF, RC> {
  *     const user = yield* fetchUser(userId)
  *     return yield* UserPage({ user })
  *   }),
- *   fallback: () => $.div({}, $.of("Loading user...")),
+ *   fallback: () => $.div($.of("Loading user...")),
  *   delay: "200 millis",
  * })
  * ```
@@ -101,8 +101,8 @@ export interface SuspenseOptions<N extends DOMElement, E, R1, RF, RC> {
  *     const user = yield* fetchUser(userId)
  *     return yield* UserPage({ user })
  *   }),
- *   fallback: () => $.div({}, $.of("Loading...")),
- *   catch: (error) => $.div({}, $.of(`Error: ${String(error)}`)),
+ *   fallback: () => $.div($.of("Loading...")),
+ *   catch: (error) => $.div($.of(`Error: ${String(error)}`)),
  *   delay: "200 millis",
  * })
  * ```
@@ -160,7 +160,7 @@ export const suspense: {
  * ```ts
  * Boundary.error(
  *   () => riskyComponent(),
- *   (error) => $.div({}, $.of(`Something went wrong: ${String(error)}`))
+ *   (error) => $.div($.of(`Something went wrong: ${String(error)}`))
  * )
  * ```
  */
@@ -309,15 +309,15 @@ const extractError = <E>(cause: Cause.Cause<E>): E => {
  * // Suspense boundary for async loading
  * Boundary.suspense({
  *   render: () => fetchAndRenderData(),
- *   fallback: () => $.div({}, $.of("Loading...")),
- *   catch: (err) => $.div({}, $.of(`Error: ${err}`)),
+ *   fallback: () => $.div($.of("Loading...")),
+ *   catch: (err) => $.div($.of(`Error: ${err}`)),
  *   delay: "200 millis",
  * })
  *
  * // Error boundary for catching render errors
  * Boundary.error(
  *   () => riskyComponent(),
- *   (err) => $.div({}, $.of(`Oops: ${err}`))
+ *   (err) => $.div($.of(`Oops: ${err}`))
  * )
  * ```
  */

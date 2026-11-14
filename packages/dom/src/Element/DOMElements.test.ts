@@ -921,7 +921,7 @@ describe("DOMElements", () => {
 
     it.scopedLive("stamps $.style with ambient CspNonce", () =>
       Effect.gen(function* () {
-        const el = yield* $.style({}, ".x{color:red}");
+        const el = yield* $.style(".x{color:red}");
         expect(el.getAttribute("nonce")).toBe("r4nd0m");
       }).pipe(Effect.provide(withNonce("r4nd0m"))),
     );

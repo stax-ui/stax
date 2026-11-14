@@ -176,13 +176,13 @@ describe("buildStaticSite colocated _data.json", () => {
     const Home = Route.make("/").pipe(
       Route.static({
         load: () => Effect.succeed({ greeting: "hello" }),
-        render: (data) => $.div({}, (data as { greeting: string }).greeting),
+        render: (data) => $.div((data as { greeting: string }).greeting),
       }),
     );
     const About = Route.make("/about").pipe(
       Route.static({
         load: () => Effect.succeed({ bio: "we build things" }),
-        render: (data) => $.div({}, (data as { bio: string }).bio),
+        render: (data) => $.div((data as { bio: string }).bio),
       }),
     );
     const router = Router.empty.pipe(Router.concat(Home), Router.concat(About));
@@ -233,11 +233,11 @@ describe("buildStaticSite colocated _data.json", () => {
         Route.make("/").pipe(
           Route.static({
             load: () => Effect.succeed({}),
-            render: () => $.div({}, "root"),
+            render: () => $.div("root"),
           }),
         ),
       ),
-      Router.fallback(() => $.div({}, "not found")),
+      Router.fallback(() => $.div("not found")),
     );
 
     await buildStaticSite({
