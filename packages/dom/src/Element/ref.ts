@@ -2,6 +2,13 @@ import { Data, Effect, Predicate, Stream } from "effect";
 
 import { Readable } from "@stax-ui/core";
 
+// The DOM's `Element` interface, aliased to avoid colliding with stax's
+// `Element` namespace once tsup bundles the `.d.ts`. Without this alias
+// the bundler renames the stax `Element` to `Element$1` and sometimes
+// rewrites DOM references to match, producing `Cannot use namespace
+// 'Element$1' as a type` under `skipLibCheck: false`.
+type DOMElement = globalThis.Element;
+
 // -----------------------------------------------------------------------------
 // TypeId
 // -----------------------------------------------------------------------------
@@ -83,7 +90,7 @@ export class DataAttributeNotFound extends Data.TaggedError(
  * ```
  */
 export interface ElementRef<
-  T extends Element = HTMLElement | SVGElement,
+  T extends DOMElement = HTMLElement | SVGElement,
 > extends Effect.Effect<T, NoSuchElementException> {
   readonly [ElementRefTypeId]: ElementRefTypeId;
   /**
@@ -112,8 +119,8 @@ export const isElementRef = (value: unknown): value is ElementRef =>
  * @internal
  */
 const elementRefMap = new WeakMap<
-  Effect.Effect<Element, NoSuchElementException>,
-  Element
+  Effect.Effect<DOMElement, NoSuchElementException>,
+  DOMElement
 >();
 
 // -----------------------------------------------------------------------------
@@ -124,7 +131,7 @@ const elementRefMap = new WeakMap<
  * Bind an element to a ref. Called internally during element creation.
  * @internal
  */
-export const bindElementToRef = <T extends Element>(
+export const bindElementToRef = <T extends DOMElement>(
   ref: ElementRef<T>,
   element: T,
 ): void => {
@@ -135,7 +142,7 @@ export const bindElementToRef = <T extends Element>(
  * Unbind an element from a ref. Can be called on element unmount.
  * @internal
  */
-export const unbindElementFromRef = <T extends Element>(
+export const unbindElementFromRef = <T extends DOMElement>(
   ref: ElementRef<T>,
 ): void => {
   elementRefMap.delete(ref);
@@ -145,7 +152,9 @@ export const unbindElementFromRef = <T extends Element>(
  * Get element from ref synchronously.
  * @internal
  */
-const getElementFromRef = <T extends Element>(ref: ElementRef<T>): T | null => {
+const getElementFromRef = <T extends DOMElement>(
+  ref: ElementRef<T>,
+): T | null => {
   return (elementRefMap.get(ref) as T) ?? null;
 };
 
@@ -174,7 +183,7 @@ const getElementFromRef = <T extends Element>(ref: ElementRef<T>): T | null => {
  * ```
  */
 export const make = <
-  T extends Element = HTMLElement | SVGElement,
+  T extends DOMElement = HTMLElement | SVGElement,
 >(): Effect.Effect<ElementRef<T>> =>
   Effect.sync(() => {
     // Create a suspended Effect that reads from the WeakMap
@@ -266,5 +275,5 @@ export const make = <
  * }
  * ```
  */
-export const getUnsafe = <T extends Element>(ref: ElementRef<T>): T | null =>
+export const getUnsafe = <T extends DOMElement>(ref: ElementRef<T>): T | null =>
   getElementFromRef(ref);

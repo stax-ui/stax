@@ -213,6 +213,65 @@ const SplitRoot = container.provides(ThemeCtx)(
 
 Use this when a layout has a header that shouldn't see the provided service but a body that should — most providers won't need it.
 
+## Generic Containers
+
+Some containers take a value parameter that has to flow from one prop to another. The canonical case is a selection Root in the Base UI shape — the caller sets `defaultValue: ["a", "b"]`, and the `onValueChange` callback should see `readonly ("a" | "b")[]` without the caller writing a type argument at the call site.
+
+Plain `container()` can't do this. It fixes `Props` when you *build* the factory, so by the time the caller passes `defaultValue`, there's no type parameter left to infer. `container.generic<F>()` solves it by lifting the parameter to each call site, using Effect's `TypeLambda` to stand for "the props shape, given `V`":
+
+```typescript
+import type { TypeLambda } from "effect/HKT";
+import { $, container } from "@stax-ui/dom";
+
+interface RootProps<V> {
+  readonly defaultValue: ReadonlyArray<V>;
+  readonly onValueChange?: (v: ReadonlyArray<V>) => void;
+}
+interface RootPropsF extends TypeLambda {
+  readonly type: RootProps<this["Target"]>;
+}
+
+const Root = container.generic<RootPropsF>()((_props, children) =>
+  $.div(children),
+);
+
+Root({ defaultValue: ["a", "b"], onValueChange: (v) => {
+  //                                              ^? v: readonly ("a" | "b")[]
+} });
+```
+
+The runtime is identical to `container()` — only the exposed type surface differs, so it's safe for any impl that stores or compares values without inspecting their shape.
+
+`container.generic<F>().provides(Tag)(impl)` and the record form both exist; they mirror `container.provides` and carry the Tag's `Identifier` into the factory's `Provides` slot the same way, so children's `R` cancels through `Exclude` as usual.
+
+### A Note on the `TypeLambda` Boilerplate
+
+The three lines after `RootProps<V>` are TypeScript's higher-kinded-type gap. A helper that collapsed `RootPropsF` to one line would need to accept `RootProps` as a *type constructor*, and TypeScript doesn't have that. Effect itself hand-writes a `TypeLambda` interface for every data module for the same reason.
+
+If your component library has a consistent Root shape — say, every selection Root takes `{ value?, defaultValue?, onValueChange? }` — write the canonical lambdas once at that layer:
+
+```typescript
+import type { TypeLambda } from "effect/HKT";
+
+export interface SelectionPropsF<Extras = {}> extends TypeLambda {
+  readonly type: Extras & {
+    readonly value?: this["Target"];
+    readonly defaultValue?: this["Target"];
+    readonly onValueChange?: (v: this["Target"]) => void;
+  };
+}
+
+export interface MultiSelectionPropsF<Extras = {}> extends TypeLambda {
+  readonly type: Extras & {
+    readonly value?: ReadonlyArray<this["Target"]>;
+    readonly defaultValue?: ReadonlyArray<this["Target"]>;
+    readonly onValueChange?: (v: ReadonlyArray<this["Target"]>) => void;
+  };
+}
+```
+
+Then `container.generic<SelectionPropsF>()` or `container.generic<MultiSelectionPropsF<{ disabled?: boolean }>>()` skips the boilerplate entirely. These helpers don't ship from `@stax-ui/dom` — the primitive doesn't take an opinion on what a Root looks like — but they're a one-time write in whatever layer *does*.
+
 ## Running Your App
 
 Use `mount` to start your application:

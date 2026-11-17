@@ -20,6 +20,7 @@
     "test:coverage": "vitest run --coverage",
     "bench": "vitest bench",
     "typecheck": "tsc --noEmit",
+    "verify-dist-types": "pnpm -r --filter='@stax-ui/*' --if-present verify-dist-types",
     "changeset": "changeset",
     "version": "changeset version && pnpm sync-template-versions && pnpm check-versions",
     "sync-template-versions": "node scripts/sync-template-versions.mjs",
