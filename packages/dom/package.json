@@ -54,7 +54,8 @@
   ],
   "sideEffects": false,
   "scripts": {
-    "build": "tsup"
+    "build": "tsup",
+    "verify-dist-types": "tsc -p scripts/verify-dist-types/tsconfig.json"
   },
   "dependencies": {
     "@stax-ui/core": "workspace:*"

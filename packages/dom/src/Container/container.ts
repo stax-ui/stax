@@ -1,5 +1,6 @@
 import { Context, Effect } from "effect";
 import { isEffect } from "effect/Effect";
+import type { Kind, TypeLambda } from "effect/HKT";
 
 import type {
   ChildLeaf,
@@ -7,7 +8,7 @@ import type {
   Element as StaxElement,
 } from "../Element/types.js";
 import { splitArgs } from "../helpers/splitArgs.js";
-import type { ContainerFactory } from "./types.js";
+import type { ContainerFactory, GenericContainerFactory } from "./types.js";
 
 // -----------------------------------------------------------------------------
 // Runtime argument dispatch
@@ -201,7 +202,7 @@ const provideContextToChildren = <R>(
  * Use {@link container.provides} to build a container that **supplies**
  * a service to its children instead of reading one.
  */
-export function container<
+function containerImpl<
   Props,
   A extends HTMLElement | SVGElement | DocumentFragment,
   SelfE,
@@ -261,7 +262,7 @@ export function container<
  * );
  * ```
  */
-export function provides<T extends Context.Tag<any, any>>(
+function provides<T extends Context.Tag<any, any>>(
   tag: T,
 ): <Props, A extends HTMLElement | SVGElement | DocumentFragment, SelfE, SelfR>(
   impl: ProviderImplOne<T, Props, A, SelfE, SelfR>,
@@ -293,7 +294,7 @@ export function provides<T extends Context.Tag<any, any>>(
  * call and `Effect.provide`d into each effectful child, so N tags × M
  * children is still one `provide` per child, not N × M wraps.
  */
-export function provides<Tags extends Record<string, Context.Tag<any, any>>>(
+function provides<Tags extends Record<string, Context.Tag<any, any>>>(
   tags: Tags,
 ): <Props, A extends HTMLElement | SVGElement | DocumentFragment, SelfE, SelfR>(
   impl: ProviderImplMany<Tags, Props, A, SelfE, SelfR>,
@@ -305,7 +306,7 @@ export function provides<Tags extends Record<string, Context.Tag<any, any>>>(
   Context.Tag.Identifier<Tags[keyof Tags]>
 >;
 
-export function provides(
+function provides(
   tagOrTags: Context.Tag<any, any> | Record<string, Context.Tag<any, any>>,
 ): (impl: (...a: any[]) => any) => (...args: any[]) => unknown {
   const isSingle = Context.isTag(tagOrTags);
@@ -342,6 +343,179 @@ export function provides(
   };
 }
 
-// Attach `.provides` to `container` so the public surface is the single
-// `container` function with a namespaced helper.
-container.provides = provides;
+// -----------------------------------------------------------------------------
+// Generic container — value-typed Roots (e.g. Accordion.Root<Value>)
+// -----------------------------------------------------------------------------
+
+/**
+ * Impl signature for a generic container. `props` sees the fully-unknown
+ * instance of the type lambda; the factory's call signature re-introduces
+ * `<const V>` so each call infers `V` from the props it receives.
+ *
+ * Runtime behavior is identical to {@link ContainerImpl} — only the exposed
+ * type surface differs.
+ */
+export type GenericContainerImpl<
+  F extends TypeLambda,
+  A extends HTMLElement | SVGElement | DocumentFragment,
+  SelfE,
+  SelfR,
+> = (
+  props: Kind<F, never, never, never, unknown>,
+  children: Children<never, never>,
+) => StaxElement<A, SelfE, SelfR>;
+
+/** Single-tag provider impl for `container.generic<F>().provides(Tag)(…)`. */
+export type GenericProviderImplOne<
+  T extends Context.Tag<unknown, unknown>,
+  F extends TypeLambda,
+  A extends HTMLElement | SVGElement | DocumentFragment,
+  SelfE,
+  SelfR,
+> = (
+  props: Kind<F, never, never, never, unknown>,
+  provide: ProvideOne<T>,
+  children?: Children<never, never>,
+) => StaxElement<A, SelfE, SelfR>;
+
+/** Multi-tag provider impl for `container.generic<F>().provides({…})(…)`. */
+export type GenericProviderImplMany<
+  Tags extends Record<string, Context.Tag<unknown, unknown>>,
+  F extends TypeLambda,
+  A extends HTMLElement | SVGElement | DocumentFragment,
+  SelfE,
+  SelfR,
+> = (
+  props: Kind<F, never, never, never, unknown>,
+  provide: ProvideMany<Tags>,
+  children?: Children<never, never>,
+) => StaxElement<A, SelfE, SelfR>;
+
+/**
+ * Return shape of `container.generic<F>()` — a callable that builds a
+ * generic container, plus a `.provides` helper mirroring the non-generic
+ * side.
+ *
+ * The `F` type lambda is fixed at the `.generic<F>()` step; from there,
+ * `A`, `SelfE`, `SelfR` (and, for `provides`, the Tag's Identifier)
+ * continue to infer from the impl as with {@link containerImpl}.
+ */
+export interface GenericContainer<F extends TypeLambda> {
+  <
+    A extends HTMLElement | SVGElement | DocumentFragment,
+    SelfE = never,
+    SelfR = never,
+  >(
+    impl: GenericContainerImpl<F, A, SelfE, SelfR>,
+  ): GenericContainerFactory<F, A, SelfE, SelfR, never>;
+
+  readonly provides: {
+    <T extends Context.Tag<any, any>>(
+      tag: T,
+    ): <
+      A extends HTMLElement | SVGElement | DocumentFragment,
+      SelfE = never,
+      SelfR = never,
+    >(
+      impl: GenericProviderImplOne<T, F, A, SelfE, SelfR>,
+    ) => GenericContainerFactory<F, A, SelfE, SelfR, Context.Tag.Identifier<T>>;
+
+    <Tags extends Record<string, Context.Tag<any, any>>>(
+      tags: Tags,
+    ): <
+      A extends HTMLElement | SVGElement | DocumentFragment,
+      SelfE = never,
+      SelfR = never,
+    >(
+      impl: GenericProviderImplMany<Tags, F, A, SelfE, SelfR>,
+    ) => GenericContainerFactory<
+      F,
+      A,
+      SelfE,
+      SelfR,
+      Context.Tag.Identifier<Tags[keyof Tags]>
+    >;
+  };
+}
+
+/**
+ * Build a generic container — a {@link containerImpl} variant whose factory
+ * carries a `<const V>` parameter at each call site, so a Root can type its
+ * `onValueChange` from its `defaultValue` the way Base UI's `Accordion.Root<V>`
+ * and friends do.
+ *
+ * Usage:
+ *
+ * ```ts
+ * import type { TypeLambda } from "effect/HKT";
+ *
+ * interface RootProps<V> {
+ *   readonly defaultValue?: ReadonlyArray<V>;
+ *   readonly onValueChange?: (v: ReadonlyArray<V>) => void;
+ * }
+ * interface RootPropsF extends TypeLambda {
+ *   readonly type: RootProps<this["Target"]>;
+ * }
+ *
+ * const Root = container.generic<RootPropsF>()(
+ *   (props, children) => $.div(children),
+ * );
+ *
+ * Root({ defaultValue: ["a", "b"], onValueChange: v => … });
+ * //                                                ^? v: readonly ("a" | "b")[]
+ * ```
+ *
+ * Runtime behavior is identical to {@link containerImpl} and {@link provides};
+ * only the type surface differs. The cast is safe for impls that only store
+ * and compare values without inspecting them, which is the shape every generic
+ * Root takes.
+ */
+function genericContainer<F extends TypeLambda>(): GenericContainer<F> {
+  const make = (<
+    A extends HTMLElement | SVGElement | DocumentFragment,
+    SelfE,
+    SelfR,
+  >(
+    impl: GenericContainerImpl<F, A, SelfE, SelfR>,
+  ) =>
+    containerImpl(
+      impl as unknown as ContainerImpl<
+        Kind<F, never, never, never, unknown>,
+        A,
+        SelfE,
+        SelfR
+      >,
+    ) as unknown as GenericContainerFactory<
+      F,
+      A,
+      SelfE,
+      SelfR,
+      never
+    >) as GenericContainer<F>;
+
+  // `provides` is reassigned as a read-write property on `make` here; the
+  // public surface narrows it to `readonly` via the GenericContainer type.
+  (make as { provides: GenericContainer<F>["provides"] }).provides =
+    provides as unknown as GenericContainer<F>["provides"];
+
+  return make;
+}
+
+/**
+ * The public `container` — see {@link containerImpl} for the full docs on the
+ * call shape and inference, {@link provides} for the `.provides(Tag | {…})`
+ * helper, and {@link genericContainer} for the `.generic<F>()` helper used for
+ * value-typed Roots.
+ *
+ * The explicit intersection replaces what was previously a function/namespace
+ * merge. Inside an emitted `declare namespace container { var provides: typeof
+ * provides; }` block the `typeof provides` lookup resolves to the namespace
+ * member itself (self-reference), which collapses to `any` under
+ * `skipLibCheck: true` and errors under `skipLibCheck: false`. Using
+ * `Object.assign` with an explicit intersection prevents TypeScript from
+ * emitting that merge in the `.d.ts`.
+ */
+export const container: typeof containerImpl & {
+  provides: typeof provides;
+  generic: typeof genericContainer;
+} = Object.assign(containerImpl, { provides, generic: genericContainer });

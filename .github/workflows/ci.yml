@@ -38,6 +38,9 @@ jobs:
 
       - run: pnpm build
 
+      - name: Verify published .d.ts types are not any
+        run: pnpm verify-dist-types
+
       - name: Verify create-stax-ui templates still build
         run: pnpm build:templates
 
