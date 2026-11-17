@@ -1,5 +1,15 @@
 # twitter-demo
 
+## 0.0.17
+
+### Patch Changes
+
+- Updated dependencies [ed6f46b]
+- Updated dependencies [ed6f46b]
+  - @stax-ui/dom@0.13.0
+  - @stax-ui/platform@0.7.2
+  - @stax-ui/router@0.6.3
+
 ## 0.0.16
 
 ### Patch Changes
