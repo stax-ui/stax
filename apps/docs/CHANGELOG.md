@@ -1,5 +1,12 @@
 # docs
 
+## 0.0.53
+
+### Patch Changes
+
+- Updated dependencies [88738fa]
+  - @stax-ui/platform@0.7.3
+
 ## 0.0.52
 
 ### Patch Changes

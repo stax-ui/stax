@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@stax-ui/dom": "^0.13.0",
-    "@stax-ui/platform": "^0.7.2",
+    "@stax-ui/platform": "^0.7.3",
     "@stax-ui/router": "^0.6.3",
     "@effect/platform": "^0.94.0",
     "effect": "^3.19.13"
