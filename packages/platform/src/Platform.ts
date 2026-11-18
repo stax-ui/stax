@@ -129,6 +129,7 @@ export interface ToHttpRoutesOptions {
   readonly app?: () => Element.Element<
     HTMLElement | SVGElement,
     never,
+    | AsyncCache
     | NavigationContext
     | RouteDataContext
     | RendererContext
@@ -396,6 +397,7 @@ export const toHttpRoutes = <
   RedirectError | RouteNotFound,
   Exclude<
     R,
+    | AsyncCache
     | RouteDataContext
     | RouteDataProvider
     | NavigationContext
@@ -762,6 +764,7 @@ export const toHttpRoutes = <
     RedirectError | RouteNotFound,
     Exclude<
       R,
+      | AsyncCache
       | RouteDataContext
       | RouteDataProvider
       | NavigationContext
@@ -1007,7 +1010,13 @@ export interface BuildStaticSiteOptions {
   readonly app?: () => import("@stax-ui/dom").Element.Element<
     HTMLElement | SVGElement,
     never,
-    never
+    | AsyncCache
+    | NavigationContext
+    | RouteDataContext
+    | RendererContext
+    | ControlCtx
+    | SuspenseBoundaryCtx
+    | Scope.Scope
   >;
   /** Document generation options (title, scripts, styles) */
   readonly document?: DocumentOptions;
