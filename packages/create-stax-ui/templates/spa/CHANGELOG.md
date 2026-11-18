@@ -1,5 +1,14 @@
 # stax-template-spa
 
+## 0.0.9
+
+### Patch Changes
+
+- Updated dependencies [ed6f46b]
+- Updated dependencies [ed6f46b]
+  - @stax-ui/dom@0.13.0
+  - @stax-ui/router@0.6.3
+
 ## 0.0.8
 
 ### Patch Changes
