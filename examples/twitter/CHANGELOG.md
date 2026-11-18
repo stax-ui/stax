@@ -1,5 +1,12 @@
 # twitter-demo
 
+## 0.0.18
+
+### Patch Changes
+
+- Updated dependencies [88738fa]
+  - @stax-ui/platform@0.7.3
+
 ## 0.0.17
 
 ### Patch Changes
