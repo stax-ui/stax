@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.4
+
+### Patch Changes
+
+- Updated dependencies [285b295]
+  - @stax-ui/dom@0.14.0
+  - @stax-ui/router@0.6.4
+
 ## 0.7.3
 
 ### Patch Changes
