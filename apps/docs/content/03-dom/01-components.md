@@ -213,6 +213,68 @@ const SplitRoot = container.provides(ThemeCtx)(
 
 Use this when a layout has a header that shouldn't see the provided service but a body that should — most providers won't need it.
 
+## Returning Sibling Elements with `$.fragment`
+
+A `container()` returns a single `Element`, so a component that needs to produce two *siblings* — a visible element plus a hidden `<input>` for form submission, a trigger plus a hidden native `<select>`, or anything else where one node won't do — has no direct way to express that. `$.fragment` fills the gap: it returns an `Element<DocumentFragment, E, R>` whose children flatten into the parent on append, the same semantics a browser `DocumentFragment` has.
+
+```typescript
+import { $, container } from "@stax-ui/dom";
+
+const Checkbox = container((props: { name: string }, children) =>
+  $.fragment(
+    $.span({ role: "checkbox", class: "visible" }, children),
+    $.input({ type: "hidden", name: props.name, value: "yes" }),
+  ),
+);
+
+// Mounting this inside a <form> places the span and the hidden input
+// as the form's direct children — no wrapper element, no extra div.
+yield* $.form(
+  Checkbox({ name: "agree" }, "I agree"),
+  $.button({ type: "submit" }, "Submit"),
+);
+```
+
+Three call shapes, mirroring `$.div` minus the attrs overloads:
+
+```typescript
+$.fragment();                       // empty — rare, but valid
+$.fragment("hello", span("name"));  // variadic children
+$.fragment([span("a"), span("b")]); // forwarded-array form
+```
+
+Children are flattened, nullish/boolean entries drop out, and nested fragments collapse — all the same rules as `$.div`'s children.
+
+### Context Behaviour
+
+`$.fragment` is **transparent** to `MergePropsCtx` — it has no DOM node of its own to consume the ctx into, so any ambient `MergePropsCtx` flows through to every direct child. A real element like `$.div` consumes the ctx (merging it into its own attrs) and then clears it for its own children; the fragment has nothing to consume with, and clearing anyway would make injected props silently vanish, so it does neither.
+
+```typescript
+// Every direct child of the fragment sees the injected prop. For the
+// Checkbox / Switch / Radio shape that means both the visible element
+// and the hidden <input> adopt it, which matches the intuition that
+// clicks / events should land on the visible primitive — the hidden
+// input picking the prop up alongside is harmless.
+Effect.provideService(
+  $.fragment($.span({ role: "checkbox" }, "☐"), $.input({ type: "hidden", … })),
+  MergePropsCtx,
+  { onClick },
+);
+```
+
+If you need to *shield* a specific child from inherited ctx — e.g. you want one sibling in the fragment to opt out — wrap it explicitly:
+
+```typescript
+$.fragment(
+  $.span({ role: "checkbox" }, "☐"),               // adopts ambient ctx
+  Effect.provideService($.input(…), MergePropsCtx, {}), // opts out
+);
+```
+
+### SSR and Hydration
+
+A fragment serializes with no wrapper node and no sentinel comments — its children appear inline as the parent's direct siblings. Hydration walks them in order through the parent's cursor the same way, picks each up as a real pre-rendered node, and binds refs and events in place. Round-trips cleanly for both the DOM and `renderToString` / `hydrate` paths.
+
 ## Injecting Props into Children
 
 Context is the right tool when children ask for a service by name (`yield* ThemeCtx`). Sometimes you need the opposite: a component wants to **inject** props into whatever its child turns out to be — an `onSubmit` into whichever element the user placed first, an `onClick` into an unknown wrapper. `MergePropsCtx` is the extension point for that.

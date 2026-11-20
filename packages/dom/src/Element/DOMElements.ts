@@ -320,6 +320,54 @@ export type SVGElementFactory<K extends keyof SVGElementTagNameMap> = {
   >;
 };
 
+/**
+ * Factory function type for {@link $.fragment}.
+ *
+ * Returns an `Element<DocumentFragment, E, R>` whose children flatten
+ * into the parent on append — DOM `appendChild(fragment)` semantics, and
+ * matched in SSR by `VFragment`. Used to return a sibling group as a
+ * single Element without a wrapper node — Checkbox / Switch / Radio
+ * returning a visible element plus a hidden `<input>`, user components
+ * that genuinely need to return two siblings, and so on.
+ *
+ * No attrs — a `DocumentFragment` has no attributes to apply — and no
+ * `ref` — the fragment is empty after the parent flattens its children
+ * in, so there's nothing to hand back. Three call shapes:
+ *
+ * - `$.fragment()` — empty fragment.
+ * - `$.fragment(child1, child2, ...)` — variadic children; each
+ *   argument is a {@link ChildInput}. `E`/`R` channels union across
+ *   children, same as `$.div`'s variadic overload.
+ * - `$.fragment(children)` — forwarded-array form with a single
+ *   `<E, R>` pair.
+ *
+ * `MergePropsCtx` behaviour: the fragment is **transparent** —
+ * ambient `MergePropsCtx` passes through to children unchanged. Real
+ * elements like `$.div` consume the context (merging it into their
+ * own attrs) and then clear it for their own children; the fragment
+ * has no DOM node to consume with, so there is nothing to clear, and
+ * clearing anyway would make injected props silently vanish. Every
+ * direct child inside sees the same ambient ctx — for the Checkbox /
+ * Switch / Radio case that means e.g. an injected `onClick` reaches
+ * the visible element and the hidden `<input>` alike (harmless on the
+ * hidden one). To shield a specific child, wrap it with
+ * `Effect.provideService(child, MergePropsCtx, {})`.
+ *
+ * Hydration and SSR are safe without sentinels — the fragment's
+ * children are siblings in the outer parent, the hydration walker
+ * threads through them at the outer cursor, and SSR serializes them
+ * inline.
+ */
+export type FragmentFactory = {
+  (): Element<DocumentFragment>;
+  <E = never, R = never>(
+    children: ReadonlyArray<ChildInput<E, R>>,
+  ): Element<DocumentFragment, E, R>;
+  <T extends ReadonlyArray<ChildInput<unknown, unknown>>>(
+    ...children: T
+  ): Element<DocumentFragment, ChildInputE<T[number]>, ChildInputR<T[number]>>;
+};
+
 // =============================================================================
 // Context for asChild pattern
 // =============================================================================
@@ -363,6 +411,33 @@ const flattenClassValue = (
 };
 
 /**
+ * Fork a background subscription to a {@link Readable}: run `apply`
+ * with the current value synchronously, then run `apply` for each
+ * emitted change in a fork rooted at the ambient scope. Captures the
+ * `get-initial → apply → forkIn(Stream.runForEach(changes, apply))`
+ * shape that would otherwise be inlined into every top-level reactive
+ * attribute binding below.
+ *
+ * Only pulled out when the apply callback is bespoke enough that no
+ * `Core.bind*` covers it — class and style's top-level Readable
+ * branches, where the value has to be re-serialized or iterated.
+ * Every `Element` resolves inside a scope already, so adding `Scope`
+ * to the enclosing effect's R is automatic.
+ */
+const bindReadable = <V, E, R>(
+  readable: Readable.Readable<V>,
+  apply: (value: V) => Effect.Effect<void, E, R>,
+) =>
+  Effect.gen(function* () {
+    const initial = yield* readable.get;
+    yield* apply(initial);
+    const scope = yield* Effect.scope;
+    yield* Stream.runForEach(readable.changes, apply).pipe(
+      Effect.forkIn(scope),
+    );
+  });
+
+/**
  * Apply class attribute to an element using Core functions.
  */
 const applyClass = <A extends HTMLElement | SVGElement>(
@@ -375,12 +450,9 @@ const applyClass = <A extends HTMLElement | SVGElement>(
       const element = yield* el;
       const renderer = yield* RendererContext;
       const readable = value as Readable.Readable<string | readonly string[]>;
-      const initial = yield* readable.get;
-      yield* renderer.setClassName(element, classValueToString(initial));
-      const scope = yield* Effect.scope;
-      yield* Stream.runForEach(readable.changes, (v) =>
+      yield* bindReadable(readable, (v) =>
         renderer.setClassName(element, classValueToString(v)),
-      ).pipe(Effect.forkIn(scope));
+      );
       return element;
     }) as Element<A>;
   }
@@ -454,18 +526,13 @@ const applyStyle = <A extends HTMLElement | SVGElement>(
       const element = yield* el;
       const renderer = yield* RendererContext;
       const readable = value as Readable.Readable<Record<string, string>>;
-      const initial = yield* readable.get;
-      for (const [prop, val] of Object.entries(initial)) {
-        yield* renderer.setStyleProperty(element, prop, val);
-      }
-      const scope = yield* Effect.scope;
-      yield* Stream.runForEach(readable.changes, (styles) =>
+      yield* bindReadable(readable, (styles) =>
         Effect.forEach(
           Object.entries(styles),
           ([prop, val]) => renderer.setStyleProperty(element, prop, val),
           { discard: true },
         ),
-      ).pipe(Effect.forkIn(scope));
+      );
       return element;
     }) as Element<A>;
   }
@@ -764,6 +831,55 @@ const createSVGElement = <K extends keyof SVGElementTagNameMap, E, R>(
     return result;
   }) as Element<SVGElementTagNameMap[K], E, R>;
 
+/**
+ * Create a DocumentFragment with the given children.
+ *
+ * The runtime mirrors `Core.appendChild`'s own children-loop (text /
+ * number primitives → text node; `Readable<string | number>` →
+ * subscribing text node; everything else → raw `appendChild`), but
+ * parented at a fresh `DocumentFragment` returned by the renderer's
+ * `createFragment`. `normalizeChildren` doesn't do the conversion —
+ * `Core.of` only `Effect.succeed`s the value — and `Core.appendChild`'s
+ * own generic constraint is `A extends HTMLElement | SVGElement`, so
+ * we inline the loop here rather than loosen it.
+ *
+ * Unlike `createElement`, this does **not** touch `MergePropsCtx` —
+ * fragments are transparent (see {@link FragmentFactory}'s JSDoc), so
+ * ambient ctx flows through to children untouched. The string /
+ * Readable branches below handle the primitive-to-Text-node step; the
+ * Readable branch keeps its own init-then-subscribe shape because the
+ * initial value has to seed `createTextNode` before the fork starts.
+ */
+const createFragmentElement = <E, R>(
+  children: Child<E, R>,
+): Element<DocumentFragment, E, R> =>
+  Effect.gen(function* () {
+    const renderer = yield* RendererContext;
+    const fragment = (yield* renderer.createFragment()) as DocumentFragment;
+
+    const childValue = yield* children;
+    const items = Array.isArray(childValue) ? childValue : [childValue];
+    for (const item of items) {
+      if (typeof item === "string" || typeof item === "number") {
+        const textNode = yield* renderer.createTextNode(String(item));
+        yield* renderer.appendChild(fragment, textNode);
+      } else if (Readable.isReadable(item)) {
+        const readable = item as Readable.Readable<string | number>;
+        const initialValue = yield* readable.get;
+        const textNode = yield* renderer.createTextNode(String(initialValue));
+        yield* renderer.appendChild(fragment, textNode);
+        const scope = yield* Effect.scope;
+        yield* Stream.runForEach(readable.changes, (value) =>
+          renderer.setTextContent(textNode, String(value)),
+        ).pipe(Effect.forkIn(scope));
+      } else {
+        yield* renderer.appendChild(fragment, item as Node);
+      }
+    }
+
+    return fragment;
+  }) as Element<DocumentFragment, E, R>;
+
 // =============================================================================
 // Factory Functions
 // =============================================================================
@@ -787,6 +903,21 @@ const makeElementFactory = <K extends keyof HTMLElementTagNameMap>(
     );
   }) as ElementFactory<K>;
 };
+
+/**
+ * {@link FragmentFactory} — build a `DocumentFragment` whose children
+ * are the arguments. See {@link FragmentFactory}'s JSDoc for the full
+ * contract (call shapes, `MergePropsCtx` boundary, hydration safety).
+ */
+export const fragment: FragmentFactory = (<E = never, R = never>(
+  ...args: unknown[]
+) => {
+  // No attrs to split out — fragments have none. The whole arg list is
+  // children, matching $.tag's variadic and forwarded-array forms.
+  const rawChildren = args as ReadonlyArray<ChildInput<E, R>>;
+  const normalized = normalizeChildren<E, R>(rawChildren);
+  return createFragmentElement(combineChildren(normalized));
+}) as FragmentFactory;
 
 /**
  * Create an SVG element factory for a specific tag.
@@ -1062,6 +1193,7 @@ export const empty = Core.empty;
 export const $ = {
   of,
   empty,
+  fragment,
   // HTML - Document structure
   div,
   span,

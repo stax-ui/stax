@@ -63,6 +63,83 @@ describe("Hydration", () => {
     });
   });
 
+  describe("fragment hydration", () => {
+    it("adopts siblings produced by $.fragment inside a parent", async () => {
+      // SSR: fragment flattens into div's children.
+      const html = await Effect.runPromise(
+        renderToString(
+          $.div(
+            { class: "host" },
+            $.fragment(
+              $.span({ class: "a" }, "First"),
+              $.span({ class: "b" }, "Second"),
+            ),
+          ),
+        ),
+      );
+      container.innerHTML = html;
+
+      const spansBefore = container.querySelectorAll("span");
+      expect(spansBefore.length).toBe(2);
+      const spanA = spansBefore[0];
+      const spanB = spansBefore[1];
+
+      // Hydrate the same tree.
+      await hydrate(
+        $.div(
+          { class: "host" },
+          $.fragment(
+            $.span({ class: "a" }, "First"),
+            $.span({ class: "b" }, "Second"),
+          ),
+        ),
+        container,
+      );
+
+      // Same nodes — hydration adopted, didn't recreate.
+      const spansAfter = container.querySelectorAll("span");
+      expect(spansAfter.length).toBe(2);
+      expect(spansAfter[0]).toBe(spanA);
+      expect(spansAfter[1]).toBe(spanB);
+      expect(spansAfter[0].textContent).toBe("First");
+      expect(spansAfter[1].textContent).toBe("Second");
+    });
+
+    it("Checkbox-style fragment adopts the visible span and hidden input", async () => {
+      const App = () =>
+        $.div(
+          { class: "host" },
+          $.fragment(
+            $.span({ role: "checkbox", class: "visible" }, "☐"),
+            $.input({ type: "hidden", name: "agree", value: "yes" }),
+          ),
+        );
+      const html = await Effect.runPromise(renderToString(App()));
+      container.innerHTML = html;
+
+      const hiddenBefore = container.querySelector(
+        'input[type="hidden"]',
+      ) as HTMLInputElement;
+      const visibleBefore = container.querySelector(
+        '[role="checkbox"]',
+      ) as HTMLElement;
+      expect(hiddenBefore).toBeTruthy();
+      expect(visibleBefore).toBeTruthy();
+
+      await hydrate(App(), container);
+
+      const hiddenAfter = container.querySelector(
+        'input[type="hidden"]',
+      ) as HTMLInputElement;
+      const visibleAfter = container.querySelector(
+        '[role="checkbox"]',
+      ) as HTMLElement;
+      expect(hiddenAfter).toBe(hiddenBefore);
+      expect(visibleAfter).toBe(visibleBefore);
+      expect(hiddenAfter.value).toBe("yes");
+    });
+  });
+
   describe("control flow hydration", () => {
     it("should hydrate when component and set up subscriptions", async () => {
       // Create signal outside for testing
