@@ -40,11 +40,15 @@ const Checkbox = container((props: { name: string }, children) =>
   static, so no delimiter is needed. The fragment's children flatten
   into the outer parent, serialize inline in SSR, and are picked up by
   the hydration walker through the outer cursor.
-- **MergePropsCtx boundary.** `$.fragment` clears `MergePropsCtx` for
-  its children, the same as `$.div`'s own boundary — so sibling children
-  inside a fragment don't all double-merge the same injected props.
-  Wrappers that want injected props to reach a specific child should
-  provide the context around that child directly.
+- **MergePropsCtx is transparent.** Unlike `$.div`, `$.fragment` does
+  not consume or clear `MergePropsCtx` — it has no DOM node of its own
+  to consume the ctx into, and clearing anyway would make injected
+  props silently vanish. Ambient ctx flows through to every direct
+  child. For the Checkbox / Switch / Radio shape both the visible
+  element and the hidden `<input>` inside the fragment adopt the
+  injected prop; the hidden one picking it up alongside is harmless.
+  To shield a specific child, wrap it with
+  `Effect.provideService(child, MergePropsCtx, {})`.
 - No attrs, no `ref` — a `DocumentFragment` has no attributes, and the
   fragment itself is empty after the parent flattens its children in.
 
@@ -53,5 +57,7 @@ Exposed as `$.fragment`, as a top-level `fragment` export, and the type
 
 Tests cover: variadic and forwarded-array call shapes, nested fragments
 flattening, Readable children updating in place, the MergePropsCtx
-boundary semantics, SSR serialization without sentinels, and a full
-hydration round-trip including a Checkbox-style sibling pattern.
+transparency (including the Checkbox-style container wrapper where
+injected props reach visible + hidden sibling alike), SSR serialization
+without sentinels, and a full hydration round-trip including a
+Checkbox-style sibling pattern.

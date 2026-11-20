@@ -586,7 +586,25 @@ describe("DOMElements", () => {
     );
 
     it.scopedLive(
-      "MergePropsCtx boundary: children don't see outer merge props",
+      "MergePropsCtx is transparent: ambient ctx reaches direct children",
+      () =>
+        Effect.gen(function* () {
+          const [a, b] = yield* Effect.provideService(
+            fragment(span({ class: "a" }, "a"), span({ class: "b" }, "b")).pipe(
+              Effect.map((f) => Array.from(f.childNodes) as HTMLElement[]),
+            ),
+            MergePropsCtx,
+            { "data-injected": "true" },
+          );
+          // Fragment is a ghost element — ambient ctx passes through to
+          // every direct child. Each span adopts the injected prop.
+          expect(a.dataset.injected).toBe("true");
+          expect(b.dataset.injected).toBe("true");
+        }).pipe(Effect.provide(TestLayer)),
+    );
+
+    it.scopedLive(
+      "MergePropsCtx transparency survives the real-element boundary above",
       () =>
         Effect.gen(function* () {
           const el = yield* Effect.provideService(
@@ -594,10 +612,36 @@ describe("DOMElements", () => {
             MergePropsCtx,
             { "data-injected": "true" },
           );
-          // Parent (div) adopts; fragment is a boundary, so span does not.
+          // The div consumes ambient ctx for itself and clears for its
+          // children; the fragment inside sees no ctx to pass through,
+          // so its span stays untouched. This exercises the "real
+          // elements still clear" half of the rule.
           expect(el.dataset.injected).toBe("true");
           const child = el.children[0] as HTMLElement;
           expect(child.dataset.injected).toBeUndefined();
+        }).pipe(Effect.provide(TestLayer)),
+    );
+
+    it.scopedLive(
+      "Checkbox-style wrapper: injected props reach visible + hidden sibling",
+      () =>
+        Effect.gen(function* () {
+          // The canonical container-wrapped fragment pattern: a
+          // container provides MergePropsCtx around the fragment it
+          // returns, and both siblings inside adopt the injected prop.
+          const Checkbox = Effect.provideService(
+            fragment(
+              span({ role: "checkbox", class: "visible" }, "☐"),
+              input({ type: "hidden", name: "agree", value: "yes" }),
+            ),
+            MergePropsCtx,
+            { "data-wired": "true" },
+          );
+          const host = yield* div({ class: "host" }, Checkbox);
+          const visible = host.children[0] as HTMLElement;
+          const hidden = host.children[1] as HTMLInputElement;
+          expect(visible.dataset.wired).toBe("true");
+          expect(hidden.dataset.wired).toBe("true");
         }).pipe(Effect.provide(TestLayer)),
     );
 

@@ -247,19 +247,29 @@ Children are flattened, nullish/boolean entries drop out, and nested fragments c
 
 ### Context Behaviour
 
-`$.fragment` is a **boundary** for `MergePropsCtx`, the same as every $-created element. If a wrapper uses `Effect.provideService(child, MergePropsCtx, { … })` to inject props into the first element, a fragment at the top of `child` doesn't let the injected props reach the children inside it:
+`$.fragment` is **transparent** to `MergePropsCtx` — it has no DOM node of its own to consume the ctx into, so any ambient `MergePropsCtx` flows through to every direct child. A real element like `$.div` consumes the ctx (merging it into its own attrs) and then clears it for its own children; the fragment has nothing to consume with, and clearing anyway would make injected props silently vanish, so it does neither.
 
 ```typescript
-// The form does NOT adopt the injected onSubmit — the fragment is a
-// boundary, so sibling children inside it don't double-merge.
+// Every direct child of the fragment sees the injected prop. For the
+// Checkbox / Switch / Radio shape that means both the visible element
+// and the hidden <input> adopt it, which matches the intuition that
+// clicks / events should land on the visible primitive — the hidden
+// input picking the prop up alongside is harmless.
 Effect.provideService(
-  $.fragment($.form(…), $.span(…)),
+  $.fragment($.span({ role: "checkbox" }, "☐"), $.input({ type: "hidden", … })),
   MergePropsCtx,
-  { onSubmit },
+  { onClick },
 );
 ```
 
-If you want injected props to reach a specific child, provide the context around *that child* directly, not around the fragment. For the typical Checkbox / Switch / Radio case this doesn't come up — the component writes its own interactive element and owns its event wiring.
+If you need to *shield* a specific child from inherited ctx — e.g. you want one sibling in the fragment to opt out — wrap it explicitly:
+
+```typescript
+$.fragment(
+  $.span({ role: "checkbox" }, "☐"),               // adopts ambient ctx
+  Effect.provideService($.input(…), MergePropsCtx, {}), // opts out
+);
+```
 
 ### SSR and Hydration
 

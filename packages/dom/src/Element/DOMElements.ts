@@ -341,12 +341,17 @@ export type SVGElementFactory<K extends keyof SVGElementTagNameMap> = {
  * - `$.fragment(children)` — forwarded-array form with a single
  *   `<E, R>` pair.
  *
- * `MergePropsCtx` behaviour: the fragment is a boundary. Any ambient
- * `MergePropsCtx` is cleared for children, same as `$.div`'s own
- * boundary, so sibling children inside a fragment don't double-merge.
- * A wrapper that wants merge-props to reach a specific child should
- * provide the context around that child directly, not around the
- * fragment.
+ * `MergePropsCtx` behaviour: the fragment is **transparent** —
+ * ambient `MergePropsCtx` passes through to children unchanged. Real
+ * elements like `$.div` consume the context (merging it into their
+ * own attrs) and then clear it for their own children; the fragment
+ * has no DOM node to consume with, so there is nothing to clear, and
+ * clearing anyway would make injected props silently vanish. Every
+ * direct child inside sees the same ambient ctx — for the Checkbox /
+ * Switch / Radio case that means e.g. an injected `onClick` reaches
+ * the visible element and the hidden `<input>` alike (harmless on the
+ * hidden one). To shield a specific child, wrap it with
+ * `Effect.provideService(child, MergePropsCtx, {})`.
  *
  * Hydration and SSR are safe without sentinels — the fragment's
  * children are siblings in the outer parent, the hydration walker
@@ -406,6 +411,33 @@ const flattenClassValue = (
 };
 
 /**
+ * Fork a background subscription to a {@link Readable}: run `apply`
+ * with the current value synchronously, then run `apply` for each
+ * emitted change in a fork rooted at the ambient scope. Captures the
+ * `get-initial → apply → forkIn(Stream.runForEach(changes, apply))`
+ * shape that would otherwise be inlined into every top-level reactive
+ * attribute binding below.
+ *
+ * Only pulled out when the apply callback is bespoke enough that no
+ * `Core.bind*` covers it — class and style's top-level Readable
+ * branches, where the value has to be re-serialized or iterated.
+ * Every `Element` resolves inside a scope already, so adding `Scope`
+ * to the enclosing effect's R is automatic.
+ */
+const bindReadable = <V, E, R>(
+  readable: Readable.Readable<V>,
+  apply: (value: V) => Effect.Effect<void, E, R>,
+) =>
+  Effect.gen(function* () {
+    const initial = yield* readable.get;
+    yield* apply(initial);
+    const scope = yield* Effect.scope;
+    yield* Stream.runForEach(readable.changes, apply).pipe(
+      Effect.forkIn(scope),
+    );
+  });
+
+/**
  * Apply class attribute to an element using Core functions.
  */
 const applyClass = <A extends HTMLElement | SVGElement>(
@@ -418,12 +450,9 @@ const applyClass = <A extends HTMLElement | SVGElement>(
       const element = yield* el;
       const renderer = yield* RendererContext;
       const readable = value as Readable.Readable<string | readonly string[]>;
-      const initial = yield* readable.get;
-      yield* renderer.setClassName(element, classValueToString(initial));
-      const scope = yield* Effect.scope;
-      yield* Stream.runForEach(readable.changes, (v) =>
+      yield* bindReadable(readable, (v) =>
         renderer.setClassName(element, classValueToString(v)),
-      ).pipe(Effect.forkIn(scope));
+      );
       return element;
     }) as Element<A>;
   }
@@ -497,18 +526,13 @@ const applyStyle = <A extends HTMLElement | SVGElement>(
       const element = yield* el;
       const renderer = yield* RendererContext;
       const readable = value as Readable.Readable<Record<string, string>>;
-      const initial = yield* readable.get;
-      for (const [prop, val] of Object.entries(initial)) {
-        yield* renderer.setStyleProperty(element, prop, val);
-      }
-      const scope = yield* Effect.scope;
-      yield* Stream.runForEach(readable.changes, (styles) =>
+      yield* bindReadable(readable, (styles) =>
         Effect.forEach(
           Object.entries(styles),
           ([prop, val]) => renderer.setStyleProperty(element, prop, val),
           { discard: true },
         ),
-      ).pipe(Effect.forkIn(scope));
+      );
       return element;
     }) as Element<A>;
   }
@@ -810,16 +834,21 @@ const createSVGElement = <K extends keyof SVGElementTagNameMap, E, R>(
 /**
  * Create a DocumentFragment with the given children.
  *
- * The runtime is close to {@link createElement}'s children-append loop
- * (text / number primitives → text node; Readable<string|number> →
+ * The runtime mirrors `Core.appendChild`'s own children-loop (text /
+ * number primitives → text node; `Readable<string | number>` →
  * subscribing text node; everything else → raw `appendChild`), but
  * parented at a fresh `DocumentFragment` returned by the renderer's
- * `createFragment`. `Core.appendChild`'s own generic constraint is
- * `A extends HTMLElement | SVGElement`, so we inline the loop here
- * rather than loosen it.
+ * `createFragment`. `normalizeChildren` doesn't do the conversion —
+ * `Core.of` only `Effect.succeed`s the value — and `Core.appendChild`'s
+ * own generic constraint is `A extends HTMLElement | SVGElement`, so
+ * we inline the loop here rather than loosen it.
  *
- * `MergePropsCtx` is cleared for children — fragments are a boundary,
- * same as $-created elements (see {@link FragmentFactory}'s JSDoc).
+ * Unlike `createElement`, this does **not** touch `MergePropsCtx` —
+ * fragments are transparent (see {@link FragmentFactory}'s JSDoc), so
+ * ambient ctx flows through to children untouched. The string /
+ * Readable branches below handle the primitive-to-Text-node step; the
+ * Readable branch keeps its own init-then-subscribe shape because the
+ * initial value has to seed `createTextNode` before the fork starts.
  */
 const createFragmentElement = <E, R>(
   children: Child<E, R>,
@@ -828,23 +857,19 @@ const createFragmentElement = <E, R>(
     const renderer = yield* RendererContext;
     const fragment = (yield* renderer.createFragment()) as DocumentFragment;
 
-    const childValue = yield* Effect.provideService(
-      children,
-      MergePropsCtx,
-      {},
-    );
+    const childValue = yield* children;
     const items = Array.isArray(childValue) ? childValue : [childValue];
-
     for (const item of items) {
       if (typeof item === "string" || typeof item === "number") {
         const textNode = yield* renderer.createTextNode(String(item));
         yield* renderer.appendChild(fragment, textNode);
       } else if (Readable.isReadable(item)) {
-        const initialValue = yield* item.get;
+        const readable = item as Readable.Readable<string | number>;
+        const initialValue = yield* readable.get;
         const textNode = yield* renderer.createTextNode(String(initialValue));
         yield* renderer.appendChild(fragment, textNode);
         const scope = yield* Effect.scope;
-        yield* Stream.runForEach(item.changes, (value) =>
+        yield* Stream.runForEach(readable.changes, (value) =>
           renderer.setTextContent(textNode, String(value)),
         ).pipe(Effect.forkIn(scope));
       } else {
