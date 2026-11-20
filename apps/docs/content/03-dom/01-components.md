@@ -213,6 +213,64 @@ const SplitRoot = container.provides(ThemeCtx)(
 
 Use this when a layout has a header that shouldn't see the provided service but a body that should — most providers won't need it.
 
+## Injecting Props into Children
+
+Context is the right tool when children ask for a service by name (`yield* ThemeCtx`). Sometimes you need the opposite: a component wants to **inject** props into whatever its child turns out to be — an `onSubmit` into whichever element the user placed first, an `onClick` into an unknown wrapper. `MergePropsCtx` is the extension point for that.
+
+### Providing
+
+`MergePropsCtx` is a `Context.Tag` whose value is a plain record of props. Provide it, and the first `$`-created element inside merges those props into its own attributes — the child's explicit props win on conflict. After the merge the Tag is cleared so further descendants don't re-inherit it.
+
+```typescript
+import { Effect } from "effect";
+import { $, MergePropsCtx, container } from "@stax-ui/dom";
+
+const WithSubmitHandler = container(
+  (props: { onSubmit: (e: SubmitEvent) => void }, children) =>
+    Effect.provideService(
+      $.div(children),
+      MergePropsCtx,
+      { onSubmit: props.onSubmit },
+    ),
+);
+```
+
+This is how `Form.provide` injects `onSubmit` into its first child, and how an `asChild` wrapper forwards props into an unknown element.
+
+### Reading
+
+Reading `MergePropsCtx` from a component is **also a supported pattern** — specifically, when a component needs to interleave its own behaviour before running what a parent injected. The canonical case is a validated `Form` that must sequence validation ahead of a parent-provided `onSubmit`:
+
+```typescript
+import { Effect, Option } from "effect";
+import { $, MergePropsCtx, container } from "@stax-ui/dom";
+
+const ValidatedForm = container(
+  (props: { onSubmit: (e: SubmitEvent) => void }, children) =>
+    Effect.gen(function* () {
+      const injected = yield* Effect.serviceOption(MergePropsCtx);
+      const parentOnSubmit = Option.match(injected, {
+        onNone: () => undefined,
+        onSome: (m) => m["onSubmit"] as ((e: SubmitEvent) => void) | undefined,
+      });
+
+      return yield* $.form(
+        {
+          onSubmit: (e) => {
+            e.preventDefault();
+            if (!validate()) return;
+            props.onSubmit(e);
+            parentOnSubmit?.(e);
+          },
+        },
+        children,
+      );
+    }),
+);
+```
+
+The Tag's `Identifier` (`"MergePropsCtx"`) and Service shape (`Record<string, unknown>`) are part of the public API — both "provide into it" and "read from it" will continue to work the same way across minor releases.
+
 ## Generic Containers
 
 Some containers take a value parameter that has to flow from one prop to another. The canonical case is a selection Root in the Base UI shape — the caller sets `defaultValue: ["a", "b"]`, and the `onValueChange` callback should see `readonly ("a" | "b")[]` without the caller writing a type argument at the call site.
@@ -243,6 +301,29 @@ Root({ defaultValue: ["a", "b"], onValueChange: (v) => {
 The runtime is identical to `container()` — only the exposed type surface differs, so it's safe for any impl that stores or compares values without inspecting their shape.
 
 `container.generic<F>().provides(Tag)(impl)` and the record form both exist; they mirror `container.provides` and carry the Tag's `Identifier` into the factory's `Provides` slot the same way, so children's `R` cancels through `Exclude` as usual.
+
+### Narrowing `V` Inside the `TypeLambda`
+
+`TypeLambda`'s `Target` slot is `unknown` — Effect's HKT system has no way to express `V extends string` on it from outside. If your Root's props need `V` to be a specific shape, apply the constraint **inside** the lambda with `Extract`:
+
+```typescript
+interface StringSelectionPropsF extends TypeLambda {
+  readonly type: {
+    readonly value?: Extract<this["Target"], string>;
+    readonly onValueChange?: (v: Extract<this["Target"], string>) => void;
+  };
+}
+
+const StringRoot = container.generic<StringSelectionPropsF>()(
+  (_props, children) => $.div(children),
+);
+
+StringRoot({ value: "panel-a" });   // ok — "panel-a" is a string
+// @ts-expect-error — 42 is not a string
+StringRoot({ value: 42 });
+```
+
+`Extract<this["Target"], string>` keeps the inferred-`V` behaviour for valid inputs and collapses to `never` (which rejects at the call site) for the rest.
 
 ### A Note on the `TypeLambda` Boilerplate
 
