@@ -299,9 +299,45 @@ const WithSubmitHandler = container(
 
 This is how `Form.provide` injects `onSubmit` into its first child, and how an `asChild` wrapper forwards props into an unknown element.
 
+### When the Automatic Root Isn't Your Semantic Root
+
+The automatic merge above lands injected props on the **first `$`-created element** inside the consumer — the "root" by Element-tree position. For most components that's exactly the semantic root, which is why `asChild`-style composition works at all without the wrapped component having to opt in. The case where it diverges is a component whose outermost element is a layout wrapper around the element that should actually receive events and ARIA state:
+
+```typescript
+const MyButton = container((props: { label: string }, children) =>
+  $.div({ class: "button-wrapper" },
+    $.button({ class: "actual-button" }, children),
+  ),
+);
+```
+
+If something wraps `MyButton` with `Effect.provideService(MyButton(…), MergePropsCtx, { onClick, "aria-pressed": true })`, the injected props land on the outer `$.div`, not the inner `$.button`. That's usually not what you want — `onClick` and `aria-pressed` belong on the button, not on a layout div. The automatic merge can't tell the two apart; it just takes the first element it meets.
+
+Two things mitigate the damage out of the box:
+
+- **Explicit props win.** `createElement` merges as `{ ...injected, ...attrs }` — anything the component's author set explicitly beats the injection, so the injection only fills in slots the author left blank. A div with no `onClick` of its own silently picking one up is the worst that happens; nothing the author declared gets overwritten.
+- **Bounded to depth 1.** Each `$.*` element consumes-and-clears, so only one element adopts and nothing further down the tree is touched.
+
+When the semantic root genuinely isn't the outermost `$`-element, the component's author routes injection explicitly by reading `MergePropsCtx` themselves — see the next section. A good rule of thumb: if the outer element is a layout-only wrapper (`.container`, `.wrapper`, `.frame`), route injection to the inner element.
+
 ### Reading
 
-Reading `MergePropsCtx` from a component is **also a supported pattern** — specifically, when a component needs to interleave its own behaviour before running what a parent injected. The canonical case is a validated `Form` that must sequence validation ahead of a parent-provided `onSubmit`:
+Reading `MergePropsCtx` from a component is **also a supported pattern**, for two reasons: to **route** injected props to a specific inner element (the layout-wrapper case from the previous section), and to **interleave** the component's own behaviour before running what a parent injected. Routing is a short spread into the intended child:
+
+```typescript
+const MyButton = container((props: { label: string }, children) =>
+  Effect.gen(function* () {
+    const injected = yield* Effect.serviceOption(MergePropsCtx);
+    const extra = Option.getOrElse(injected, () => ({}));
+    return yield* $.div({ class: "button-wrapper" },
+      // Spread the injected props onto the semantic root, not the wrapper.
+      $.button({ class: "actual-button", ...extra }, children),
+    );
+  }),
+);
+```
+
+The interleave case is deeper. The canonical example is a validated `Form` that must sequence validation ahead of a parent-provided `onSubmit`:
 
 ```typescript
 import { Effect, Option } from "effect";
