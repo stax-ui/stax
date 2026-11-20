@@ -15,6 +15,7 @@ import {
   div,
   empty,
   form,
+  fragment,
   h1,
   img,
   input,
@@ -496,6 +497,132 @@ describe("DOMElements", () => {
     );
   });
 
+  describe("fragment", () => {
+    it.scopedLive("no-args form produces an empty DocumentFragment", () =>
+      Effect.gen(function* () {
+        const frag = yield* fragment();
+        expect(frag).toBeInstanceOf(DocumentFragment);
+        expect(frag.childNodes.length).toBe(0);
+      }).pipe(Effect.provide(TestLayer)),
+    );
+
+    it.scopedLive(
+      "variadic children appear as fragment children before parent append",
+      () =>
+        Effect.gen(function* () {
+          const frag = yield* fragment(
+            span({ class: "a" }, "A"),
+            span({ class: "b" }, "B"),
+          );
+          expect(frag).toBeInstanceOf(DocumentFragment);
+          expect(frag.childNodes.length).toBe(2);
+          expect((frag.childNodes[0] as HTMLElement).className).toBe("a");
+          expect((frag.childNodes[1] as HTMLElement).className).toBe("b");
+        }).pipe(Effect.provide(TestLayer)),
+    );
+
+    it.scopedLive(
+      "forwarded-array form accepts a ReadonlyArray of children",
+      () =>
+        Effect.gen(function* () {
+          const children = [span("x"), span("y"), span("z")];
+          const frag = yield* fragment(children);
+          expect(frag.childNodes.length).toBe(3);
+        }).pipe(Effect.provide(TestLayer)),
+    );
+
+    it.scopedLive(
+      "flattens into parent on append (DOM fragment semantics)",
+      () =>
+        Effect.gen(function* () {
+          const el = yield* div(
+            { class: "host" },
+            fragment(
+              span({ class: "first" }, "F"),
+              span({ class: "second" }, "S"),
+            ),
+          );
+          // After append, the fragment is empty and siblings land in the div.
+          expect(el.childNodes.length).toBe(2);
+          expect((el.children[0] as HTMLElement).className).toBe("first");
+          expect((el.children[1] as HTMLElement).className).toBe("second");
+        }).pipe(Effect.provide(TestLayer)),
+    );
+
+    it.scopedLive("primitives and Elements can mix as children", () =>
+      Effect.gen(function* () {
+        const el = yield* div(
+          fragment("hello ", span({ class: "name" }, "world")),
+        );
+        expect(el.childNodes.length).toBe(2);
+        expect(el.childNodes[0].nodeType).toBe(Node.TEXT_NODE);
+        expect(el.childNodes[0].textContent).toBe("hello ");
+        expect((el.children[0] as HTMLElement).className).toBe("name");
+      }).pipe(Effect.provide(TestLayer)),
+    );
+
+    it.scopedLive("Readable children update in place after mount", () =>
+      Effect.gen(function* () {
+        const label = yield* Signal.make("one");
+        const el = yield* div(fragment(label, span("tail")));
+        expect(el.childNodes[0].textContent).toBe("one");
+        yield* Effect.sleep("20 millis");
+        yield* label.set("two");
+        yield* Effect.sleep("20 millis");
+        expect(el.childNodes[0].textContent).toBe("two");
+      }).pipe(Effect.provide(TestLayer)),
+    );
+
+    it.scopedLive("nested fragments flatten through", () =>
+      Effect.gen(function* () {
+        const el = yield* div(
+          fragment(fragment(span("a"), span("b")), span("c")),
+        );
+        expect(el.children.length).toBe(3);
+        expect(el.children[0].textContent).toBe("a");
+        expect(el.children[1].textContent).toBe("b");
+        expect(el.children[2].textContent).toBe("c");
+      }).pipe(Effect.provide(TestLayer)),
+    );
+
+    it.scopedLive(
+      "MergePropsCtx boundary: children don't see outer merge props",
+      () =>
+        Effect.gen(function* () {
+          const el = yield* Effect.provideService(
+            div({ class: "host" }, fragment(span({ class: "child" }, "x"))),
+            MergePropsCtx,
+            { "data-injected": "true" },
+          );
+          // Parent (div) adopts; fragment is a boundary, so span does not.
+          expect(el.dataset.injected).toBe("true");
+          const child = el.children[0] as HTMLElement;
+          expect(child.dataset.injected).toBeUndefined();
+        }).pipe(Effect.provide(TestLayer)),
+    );
+
+    it.scopedLive(
+      "Checkbox-style: visible element + hidden input as siblings",
+      () =>
+        Effect.gen(function* () {
+          // Shape primitives agents want: a visible span and a hidden
+          // native <input> as its next sibling, returned as one Element.
+          const Checkbox = fragment(
+            span({ role: "checkbox", class: "visible" }, "☐"),
+            input({ type: "hidden", name: "agree", value: "yes" }),
+          );
+          const host = yield* div({ class: "host" }, Checkbox);
+          expect(host.children.length).toBe(2);
+          const visible = host.children[0] as HTMLElement;
+          const hidden = host.children[1] as HTMLInputElement;
+          expect(visible.getAttribute("role")).toBe("checkbox");
+          expect(hidden.tagName).toBe("INPUT");
+          expect(hidden.type).toBe("hidden");
+          expect(hidden.name).toBe("agree");
+        }).pipe(Effect.provide(TestLayer)),
+    );
+  });
+
   describe("$ namespace", () => {
     it("should have all common elements", () => {
       expect($.div).toBeDefined();
@@ -509,6 +636,7 @@ describe("DOMElements", () => {
       expect($.form).toBeDefined();
       expect($.svg).toBeDefined();
       expect($.path).toBeDefined();
+      expect($.fragment).toBeDefined();
     });
 
     it("should have helper functions", () => {

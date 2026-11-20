@@ -57,6 +57,68 @@ describe("SSR", () => {
     });
   });
 
+  describe("fragment", () => {
+    it("inlines children into the parent with no wrapper node", async () => {
+      const html = await Effect.runPromise(
+        renderToString(
+          $.div(
+            { class: "host" },
+            $.fragment(
+              $.span({ class: "a" }, "First"),
+              $.span({ class: "b" }, "Second"),
+            ),
+          ),
+        ),
+      );
+
+      expect(html).toContain('<div class="host">');
+      expect(html).toContain('<span class="a">First</span>');
+      expect(html).toContain('<span class="b">Second</span>');
+      // No sentinel comments, no wrapper element — the fragment's
+      // children serialize inline as the div's direct children.
+      expect(html).not.toContain("$stax");
+      expect(html).not.toContain("/stax");
+      // The two spans are the div's immediate children, nothing between.
+      expect(html.replace(/\s+/g, "")).toContain(
+        '<divclass="host"><spanclass="a">First</span><spanclass="b">Second</span></div>',
+      );
+    });
+
+    it("emits an empty fragment as nothing", async () => {
+      const html = await Effect.runPromise(
+        renderToString($.div({ class: "host" }, $.fragment())),
+      );
+      expect(html.replace(/\s+/g, "")).toContain('<divclass="host"></div>');
+    });
+
+    it("serializes nested fragments as a flat sibling list", async () => {
+      const html = await Effect.runPromise(
+        renderToString(
+          $.div($.fragment($.fragment($.span("a"), $.span("b")), $.span("c"))),
+        ),
+      );
+      expect(html.replace(/\s+/g, "")).toContain(
+        "<div><span>a</span><span>b</span><span>c</span></div>",
+      );
+    });
+
+    it("Checkbox-style visible + hidden input siblings round-trip through SSR", async () => {
+      const html = await Effect.runPromise(
+        renderToString(
+          $.div(
+            { class: "host" },
+            $.fragment(
+              $.span({ role: "checkbox" }, "☐"),
+              $.input({ type: "hidden", name: "agree", value: "yes" }),
+            ),
+          ),
+        ),
+      );
+      expect(html).toContain('role="checkbox"');
+      expect(html).toContain('<input type="hidden" name="agree"');
+    });
+  });
+
   describe("when with hydration markers", () => {
     it("should add hydration markers to when container", async () => {
       const html = await Effect.runPromise(

@@ -320,6 +320,49 @@ export type SVGElementFactory<K extends keyof SVGElementTagNameMap> = {
   >;
 };
 
+/**
+ * Factory function type for {@link $.fragment}.
+ *
+ * Returns an `Element<DocumentFragment, E, R>` whose children flatten
+ * into the parent on append — DOM `appendChild(fragment)` semantics, and
+ * matched in SSR by `VFragment`. Used to return a sibling group as a
+ * single Element without a wrapper node — Checkbox / Switch / Radio
+ * returning a visible element plus a hidden `<input>`, user components
+ * that genuinely need to return two siblings, and so on.
+ *
+ * No attrs — a `DocumentFragment` has no attributes to apply — and no
+ * `ref` — the fragment is empty after the parent flattens its children
+ * in, so there's nothing to hand back. Three call shapes:
+ *
+ * - `$.fragment()` — empty fragment.
+ * - `$.fragment(child1, child2, ...)` — variadic children; each
+ *   argument is a {@link ChildInput}. `E`/`R` channels union across
+ *   children, same as `$.div`'s variadic overload.
+ * - `$.fragment(children)` — forwarded-array form with a single
+ *   `<E, R>` pair.
+ *
+ * `MergePropsCtx` behaviour: the fragment is a boundary. Any ambient
+ * `MergePropsCtx` is cleared for children, same as `$.div`'s own
+ * boundary, so sibling children inside a fragment don't double-merge.
+ * A wrapper that wants merge-props to reach a specific child should
+ * provide the context around that child directly, not around the
+ * fragment.
+ *
+ * Hydration and SSR are safe without sentinels — the fragment's
+ * children are siblings in the outer parent, the hydration walker
+ * threads through them at the outer cursor, and SSR serializes them
+ * inline.
+ */
+export type FragmentFactory = {
+  (): Element<DocumentFragment>;
+  <E = never, R = never>(
+    children: ReadonlyArray<ChildInput<E, R>>,
+  ): Element<DocumentFragment, E, R>;
+  <T extends ReadonlyArray<ChildInput<unknown, unknown>>>(
+    ...children: T
+  ): Element<DocumentFragment, ChildInputE<T[number]>, ChildInputR<T[number]>>;
+};
+
 // =============================================================================
 // Context for asChild pattern
 // =============================================================================
@@ -764,6 +807,54 @@ const createSVGElement = <K extends keyof SVGElementTagNameMap, E, R>(
     return result;
   }) as Element<SVGElementTagNameMap[K], E, R>;
 
+/**
+ * Create a DocumentFragment with the given children.
+ *
+ * The runtime is close to {@link createElement}'s children-append loop
+ * (text / number primitives → text node; Readable<string|number> →
+ * subscribing text node; everything else → raw `appendChild`), but
+ * parented at a fresh `DocumentFragment` returned by the renderer's
+ * `createFragment`. `Core.appendChild`'s own generic constraint is
+ * `A extends HTMLElement | SVGElement`, so we inline the loop here
+ * rather than loosen it.
+ *
+ * `MergePropsCtx` is cleared for children — fragments are a boundary,
+ * same as $-created elements (see {@link FragmentFactory}'s JSDoc).
+ */
+const createFragmentElement = <E, R>(
+  children: Child<E, R>,
+): Element<DocumentFragment, E, R> =>
+  Effect.gen(function* () {
+    const renderer = yield* RendererContext;
+    const fragment = (yield* renderer.createFragment()) as DocumentFragment;
+
+    const childValue = yield* Effect.provideService(
+      children,
+      MergePropsCtx,
+      {},
+    );
+    const items = Array.isArray(childValue) ? childValue : [childValue];
+
+    for (const item of items) {
+      if (typeof item === "string" || typeof item === "number") {
+        const textNode = yield* renderer.createTextNode(String(item));
+        yield* renderer.appendChild(fragment, textNode);
+      } else if (Readable.isReadable(item)) {
+        const initialValue = yield* item.get;
+        const textNode = yield* renderer.createTextNode(String(initialValue));
+        yield* renderer.appendChild(fragment, textNode);
+        const scope = yield* Effect.scope;
+        yield* Stream.runForEach(item.changes, (value) =>
+          renderer.setTextContent(textNode, String(value)),
+        ).pipe(Effect.forkIn(scope));
+      } else {
+        yield* renderer.appendChild(fragment, item as Node);
+      }
+    }
+
+    return fragment;
+  }) as Element<DocumentFragment, E, R>;
+
 // =============================================================================
 // Factory Functions
 // =============================================================================
@@ -787,6 +878,21 @@ const makeElementFactory = <K extends keyof HTMLElementTagNameMap>(
     );
   }) as ElementFactory<K>;
 };
+
+/**
+ * {@link FragmentFactory} — build a `DocumentFragment` whose children
+ * are the arguments. See {@link FragmentFactory}'s JSDoc for the full
+ * contract (call shapes, `MergePropsCtx` boundary, hydration safety).
+ */
+export const fragment: FragmentFactory = (<E = never, R = never>(
+  ...args: unknown[]
+) => {
+  // No attrs to split out — fragments have none. The whole arg list is
+  // children, matching $.tag's variadic and forwarded-array forms.
+  const rawChildren = args as ReadonlyArray<ChildInput<E, R>>;
+  const normalized = normalizeChildren<E, R>(rawChildren);
+  return createFragmentElement(combineChildren(normalized));
+}) as FragmentFactory;
 
 /**
  * Create an SVG element factory for a specific tag.
@@ -1062,6 +1168,7 @@ export const empty = Core.empty;
 export const $ = {
   of,
   empty,
+  fragment,
   // HTML - Document structure
   div,
   span,

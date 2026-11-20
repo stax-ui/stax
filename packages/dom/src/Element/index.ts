@@ -9,6 +9,7 @@ export type {
   ElementFactory,
   EventAttributes,
   EventHandler,
+  FragmentFactory,
   HTMLAttributes,
   StyleValue,
   SVGAttributes,
@@ -43,5 +44,5 @@ export type {
   PermissiveChildren,
 } from "./types.js";
 
-export { $, MergePropsCtx } from "./DOMElements.js";
+export { $, fragment, MergePropsCtx } from "./DOMElements.js";
 export { isAttrsObject, splitArgs } from "../helpers/splitArgs.js";
