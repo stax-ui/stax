@@ -19,7 +19,7 @@
 import { Context, Effect, Scope } from "effect";
 import type { TypeLambda } from "effect/HKT";
 
-import { RendererContext } from "@stax-ui/core";
+import { RendererContext, type SingleRoot } from "@stax-ui/core";
 
 import { $ } from "../Element/DOMElements.js";
 import { container } from "./container.js";
@@ -69,7 +69,7 @@ const _rootInferA = Root({
 });
 
 export type _RootInferASuccess = Expect<
-  Equals<SuccessOf<typeof _rootInferA>, HTMLDivElement>
+  Equals<SuccessOf<typeof _rootInferA>, HTMLDivElement & SingleRoot>
 >;
 export type _RootInferARequires = Expect<
   Equals<RequirementsOf<typeof _rootInferA>, Ambient>
@@ -153,7 +153,7 @@ const _providerCall = ProviderRoot(
 );
 
 export type _ProviderRootA = Expect<
-  Equals<SuccessOf<typeof _providerCall>, HTMLDivElement>
+  Equals<SuccessOf<typeof _providerCall>, HTMLDivElement & SingleRoot>
 >;
 // CollapsibleRootCtx is NOT in requirements — provided by ProviderRoot.
 export type _ProviderRootR = Expect<
@@ -181,5 +181,5 @@ export const _leafText = Leaf("hi");
 export const _leafPropsText = Leaf({ hint: ["a", "b"] }, "hi");
 
 export type _LeafA = Expect<
-  Equals<SuccessOf<typeof _leafText>, HTMLSpanElement>
+  Equals<SuccessOf<typeof _leafText>, HTMLSpanElement & SingleRoot>
 >;
