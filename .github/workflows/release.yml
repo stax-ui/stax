@@ -27,6 +27,13 @@ jobs:
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
+      # pnpm delegates `publish` to `npm publish`. npm 11.5.1+ is required
+      # for Trusted Publishers OIDC auth exchange (not just provenance
+      # signing — that works on older npm). Node 22 ships npm 10.x. Pin to
+      # npm@11 — the latest 11.x — because npm 12 dropped `--no-git-checks`
+      # which changesets still passes through `pnpm publish`.
+      - run: npm install -g npm@11
+
       - run: pnpm install --frozen-lockfile
 
       - name: Verify no package has moved off the 0.x track
