@@ -168,6 +168,16 @@ export interface Form<
 
   /**
    * Create live form state and provide context to children.
+   *
+   * `children` is any Effect that reads form state through `FormCtx` —
+   * typically a `$`-element that will render the form, but an Effect
+   * that reads field values and returns a non-element result (useful
+   * in tests and non-rendering workflows) is also accepted. When the
+   * children do render a form-shaped element, `MergePropsCtx` is
+   * installed so form-level props (`onSubmit`, `action`, `method`)
+   * merge onto the first `$`-element — the single-root guarantee for
+   * that merge is enforced where it belongs, at
+   * {@link injectProps}, not here.
    */
   readonly provide: <A, E2, R2>(
     config: ProvideConfig<
@@ -309,8 +319,15 @@ export const make = <
         mergeProps.method = "POST";
       }
 
-      // Provide form context and inject props via MergePropsCtx
-      // The first element (typically $.form) will receive these props
+      // Provide form context and the ambient MergePropsCtx. If
+      // `children` resolves to a `$`-element, the first such element
+      // consumes the merge; if it resolves to a `$.fragment(...)` with
+      // non-empty mergeProps, the fragment's runtime guard dies with a
+      // message pointing at `injectProps`; if it resolves to anything
+      // else (e.g. a test observation), the ctx is unused and dropped.
+      // The compile-time single-root constraint lives on `injectProps`,
+      // the direct provider entry point, not here — `Form.provide` is
+      // a context installer first.
       return yield* children.pipe(
         Effect.provideService(FormContext, contextValue),
         Effect.provideService(MergePropsCtx, mergeProps),

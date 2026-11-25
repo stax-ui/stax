@@ -1,8 +1,8 @@
 import { describe, it } from "@effect/vitest";
-import { Effect, Layer } from "effect";
+import { Cause, Effect, Exit, Layer } from "effect";
 import { beforeEach, expect, vi } from "vitest";
 
-import { Signal } from "@stax-ui/core";
+import { injectProps, Signal } from "@stax-ui/core";
 
 import { collect } from "../Collect.js";
 import { CspNonce } from "../CspNonce.js";
@@ -495,6 +495,41 @@ describe("DOMElements", () => {
         expect(child.dataset.injected).toBeUndefined();
       }).pipe(Effect.provide(TestLayer)),
     );
+
+    describe("injectProps", () => {
+      it.scopedLive("data-first: merges props into the root element", () =>
+        Effect.gen(function* () {
+          const el = yield* injectProps(div({ class: "user" }), {
+            id: "injected",
+            "data-src": "helper",
+          });
+          expect(el.id).toBe("injected");
+          expect(el.dataset.src).toBe("helper");
+          expect(el.className).toBe("user");
+        }).pipe(Effect.provide(TestLayer)),
+      );
+
+      it.scopedLive("pipeable: same merge via the curried overload", () =>
+        Effect.gen(function* () {
+          const el = yield* div({ class: "user" }).pipe(
+            injectProps({ id: "injected" }),
+          );
+          expect(el.id).toBe("injected");
+          expect(el.className).toBe("user");
+        }).pipe(Effect.provide(TestLayer)),
+      );
+
+      it.scopedLive(
+        "explicit attrs still win over injected props (asChild rule)",
+        () =>
+          Effect.gen(function* () {
+            const el = yield* injectProps(div({ id: "user-id" }), {
+              id: "injected-id",
+            });
+            expect(el.id).toBe("user-id");
+          }).pipe(Effect.provide(TestLayer)),
+      );
+    });
   });
 
   describe("fragment", () => {
@@ -586,36 +621,43 @@ describe("DOMElements", () => {
     );
 
     it.scopedLive(
-      "MergePropsCtx is transparent: ambient ctx reaches direct children",
+      "non-empty ambient MergePropsCtx dies — fragment is not a single root",
       () =>
         Effect.gen(function* () {
-          const [a, b] = yield* Effect.provideService(
-            fragment(span({ class: "a" }, "a"), span({ class: "b" }, "b")).pipe(
-              Effect.map((f) => Array.from(f.childNodes) as HTMLElement[]),
+          // Raw `Effect.provideService(fragment, MergePropsCtx, {nonempty})`
+          // compiles — it bypasses `injectProps`'s type constraint — but
+          // runtime-dies because a fragment has no canonical adopter.
+          const exit = yield* Effect.exit(
+            Effect.provideService(
+              fragment(span({ class: "a" }, "a"), span({ class: "b" }, "b")),
+              MergePropsCtx,
+              { "data-injected": "true" },
             ),
-            MergePropsCtx,
-            { "data-injected": "true" },
           );
-          // Fragment is a ghost element — ambient ctx passes through to
-          // every direct child. Each span adopts the injected prop.
-          expect(a.dataset.injected).toBe("true");
-          expect(b.dataset.injected).toBe("true");
+          expect(Exit.isFailure(exit)).toBe(true);
+          if (Exit.isFailure(exit)) {
+            const defect = Cause.dieOption(exit.cause);
+            expect(defect._tag).toBe("Some");
+            if (defect._tag === "Some") {
+              expect(String(defect.value)).toMatch(/MergePropsCtx/);
+              expect(String(defect.value)).toMatch(/fragment/i);
+            }
+          }
         }).pipe(Effect.provide(TestLayer)),
     );
 
     it.scopedLive(
-      "MergePropsCtx transparency survives the real-element boundary above",
+      "empty ambient MergePropsCtx passes — the 'parent already cleared' case",
       () =>
         Effect.gen(function* () {
+          // When a parent $-element consumes and clears ctx, a fragment
+          // inside sees `{}` in the ambient — not non-empty, so the
+          // guard doesn't fire and the fragment flattens normally.
           const el = yield* Effect.provideService(
             div({ class: "host" }, fragment(span({ class: "child" }, "x"))),
             MergePropsCtx,
             { "data-injected": "true" },
           );
-          // The div consumes ambient ctx for itself and clears for its
-          // children; the fragment inside sees no ctx to pass through,
-          // so its span stays untouched. This exercises the "real
-          // elements still clear" half of the rule.
           expect(el.dataset.injected).toBe("true");
           const child = el.children[0] as HTMLElement;
           expect(child.dataset.injected).toBeUndefined();
@@ -623,25 +665,30 @@ describe("DOMElements", () => {
     );
 
     it.scopedLive(
-      "Checkbox-style wrapper: injected props reach visible + hidden sibling",
+      "wrapping a fragment in a single-root element is the sanctioned route",
       () =>
         Effect.gen(function* () {
-          // The canonical container-wrapped fragment pattern: a
-          // container provides MergePropsCtx around the fragment it
-          // returns, and both siblings inside adopt the injected prop.
-          const Checkbox = Effect.provideService(
+          // The right way to accept injected props when the component
+          // semantically emits siblings: wrap the fragment in a
+          // container element. The wrapper consumes the injection; the
+          // fragment sits inside and flattens its children in.
+          const Checkbox = div(
+            { class: "checkbox" },
             fragment(
               span({ role: "checkbox", class: "visible" }, "☐"),
               input({ type: "hidden", name: "agree", value: "yes" }),
             ),
-            MergePropsCtx,
-            { "data-wired": "true" },
           );
-          const host = yield* div({ class: "host" }, Checkbox);
-          const visible = host.children[0] as HTMLElement;
-          const hidden = host.children[1] as HTMLInputElement;
-          expect(visible.dataset.wired).toBe("true");
-          expect(hidden.dataset.wired).toBe("true");
+          const el = yield* injectProps(Checkbox, { "data-wired": "true" });
+          expect(el.dataset.wired).toBe("true");
+          expect(el.children.length).toBe(2);
+          const visible = el.children[0] as HTMLElement;
+          const hidden = el.children[1] as HTMLInputElement;
+          // Fragment children end up as direct children of the wrapper
+          // div, and neither sibling adopts the injected prop (the
+          // wrapper did, and cleared for descendants).
+          expect(visible.dataset.wired).toBeUndefined();
+          expect(hidden.dataset.wired).toBeUndefined();
         }).pipe(Effect.provide(TestLayer)),
     );
 

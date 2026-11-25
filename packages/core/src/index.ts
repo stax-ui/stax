@@ -41,8 +41,8 @@ export type { Slot } from "./Renderer.js";
 export { Renderer, RendererContext } from "./Renderer.js";
 
 // Element
-export type { Element } from "./Element.js";
-export { MergePropsCtx } from "./Element.js";
+export type { Element, SingleRoot, SingleRootElement } from "./Element.js";
+export { injectProps, MergePropsCtx } from "./Element.js";
 
 // Boundary
 export type {

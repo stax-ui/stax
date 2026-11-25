@@ -21,7 +21,7 @@
 
 import { Context, Effect, Scope } from "effect";
 
-import { RendererContext } from "@stax-ui/core";
+import { RendererContext, type SingleRoot } from "@stax-ui/core";
 
 import { $ } from "../Element/DOMElements.js";
 import type { Element as StaxElement } from "../Element/types.js";
@@ -89,7 +89,7 @@ export const _leafText = Leaf("hello");
 export const _leafPropsText = Leaf({ label: "x" }, "hello");
 
 export type _LeafA = Expect<
-  Equals<SuccessOf<typeof _leafText>, HTMLSpanElement>
+  Equals<SuccessOf<typeof _leafText>, HTMLSpanElement & SingleRoot>
 >;
 export type _LeafR = Expect<Equals<RequirementsOf<typeof _leafText>, Ambient>>;
 export type _LeafE = Expect<Equals<FailuresOf<typeof _leafText>, never>>;
@@ -107,7 +107,7 @@ const Panel = container((_props: PanelProps, children) =>
 
 const _panelCall = Panel({}, "text");
 export type _PanelA = Expect<
-  Equals<SuccessOf<typeof _panelCall>, HTMLDivElement>
+  Equals<SuccessOf<typeof _panelCall>, HTMLDivElement & SingleRoot>
 >;
 export type _PanelR = Expect<
   Equals<RequirementsOf<typeof _panelCall>, Ambient | CollapsibleRootCtx>
@@ -196,7 +196,7 @@ const Root = container.provides(CollapsibleRootCtx)(
 
 const _rootCall = Root({}, "x");
 export type _RootA = Expect<
-  Equals<SuccessOf<typeof _rootCall>, HTMLDivElement>
+  Equals<SuccessOf<typeof _rootCall>, HTMLDivElement & SingleRoot>
 >;
 export type _RootR = Expect<Equals<RequirementsOf<typeof _rootCall>, Ambient>>;
 
@@ -243,7 +243,7 @@ const MultiRoot = container.provides({
 
 const _multiRootCall = MultiRoot({}, "x");
 export type _MultiRootA = Expect<
-  Equals<SuccessOf<typeof _multiRootCall>, HTMLDivElement>
+  Equals<SuccessOf<typeof _multiRootCall>, HTMLDivElement & SingleRoot>
 >;
 export type _MultiRootR = Expect<
   Equals<RequirementsOf<typeof _multiRootCall>, Ambient>

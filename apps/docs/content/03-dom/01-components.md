@@ -247,29 +247,39 @@ Children are flattened, nullish/boolean entries drop out, and nested fragments c
 
 ### Context Behaviour
 
-`$.fragment` is **transparent** to `MergePropsCtx` — it has no DOM node of its own to consume the ctx into, so any ambient `MergePropsCtx` flows through to every direct child. A real element like `$.div` consumes the ctx (merging it into its own attrs) and then clears it for its own children; the fragment has nothing to consume with, and clearing anyway would make injected props silently vanish, so it does neither.
+A fragment is not a valid `MergePropsCtx` target. `MergePropsCtx` picks a *single* root to merge props into; a fragment emits *many* roots with no canonical adopter, so the convention breaks down. The sanctioned provider entry point ([`injectProps`](#providing)) rejects fragment-rooted Elements at compile time — `$.fragment` returns `Element<DocumentFragment, …>` with no `SingleRoot` brand, so the constraint fails:
 
 ```typescript
-// Every direct child of the fragment sees the injected prop. For the
-// Checkbox / Switch / Radio shape that means both the visible element
-// and the hidden <input> adopt it, which matches the intuition that
-// clicks / events should land on the visible primitive — the hidden
-// input picking the prop up alongside is harmless.
+injectProps(
+  $.fragment($.span("a"), $.input({ type: "hidden" })),
+  { onClick }, // ❌ type error: DocumentFragment does not satisfy `A extends SingleRoot`
+);
+```
+
+The raw `Effect.provideService(…, MergePropsCtx, …)` escape hatch stays compilable (the Tag itself is public API and nothing stops you from providing to any Effect), but it runtime-dies at the fragment with a message pointing at `injectProps`:
+
+```typescript
 Effect.provideService(
-  $.fragment($.span({ role: "checkbox" }, "☐"), $.input({ type: "hidden", … })),
+  $.fragment($.span("a"), $.input({ type: "hidden" })),
   MergePropsCtx,
   { onClick },
-);
+); // ❌ dies: "MergePropsCtx was provided to a $.fragment. …"
 ```
 
-If you need to *shield* a specific child from inherited ctx — e.g. you want one sibling in the fragment to opt out — wrap it explicitly:
+The right way to accept injected props and still emit sibling children is to **wrap the fragment in a container element** that owns the injection. The container element consumes the merge and clears for its descendants; the fragment inside flattens its children into the container's DOM children.
 
 ```typescript
-$.fragment(
-  $.span({ role: "checkbox" }, "☐"),               // adopts ambient ctx
-  Effect.provideService($.input(…), MergePropsCtx, {}), // opts out
+const Checkbox = $.div({ class: "checkbox" },
+  $.fragment(
+    $.span({ role: "checkbox" }, children),
+    $.input({ type: "hidden", name: "agree", value: "yes" }),
+  ),
 );
+
+injectProps(Checkbox, { "data-wired": "true" }); // ✓ merges onto the div
 ```
+
+Through-pass of other services (theming, router, etc.) is unchanged — the restriction is specific to `MergePropsCtx`.
 
 ### SSR and Hydration
 
@@ -281,27 +291,68 @@ Context is the right tool when children ask for a service by name (`yield* Theme
 
 ### Providing
 
-`MergePropsCtx` is a `Context.Tag` whose value is a plain record of props. Provide it, and the first `$`-created element inside merges those props into its own attributes — the child's explicit props win on conflict. After the merge the Tag is cleared so further descendants don't re-inherit it.
+`injectProps(child, props)` is the sanctioned way to provide `MergePropsCtx`. It takes a single-root Element (`A extends SingleRoot`) and a record of props; the first `$`-created element inside merges those props into its own attributes — the child's explicit props win on conflict. After the merge the Tag is cleared so further descendants don't re-inherit it.
+
+`SingleRoot` is a nominal brand attached by each backend's single-root factories — `@stax-ui/dom`'s `$.div`, `$.form`, etc. return `Element<HTMLDivElement & SingleRoot, …>` and so on, while `$.fragment` deliberately returns `Element<DocumentFragment, …>` without the brand. Because the brand rides on the Element's success type, inference threads it through `yield*` and back out of `Effect.gen` bodies, so containers whose body yields a single-root element preserve the brand automatically — no annotation needed at the call site. If you do hand-annotate, use the `SingleRootElement<HTMLFormElement>` convenience alias (equivalent to `Element<HTMLFormElement & SingleRoot>`).
 
 ```typescript
-import { Effect } from "effect";
-import { $, MergePropsCtx, container } from "@stax-ui/dom";
+import { $, container, injectProps } from "@stax-ui/dom";
 
 const WithSubmitHandler = container(
   (props: { onSubmit: (e: SubmitEvent) => void }, children) =>
-    Effect.provideService(
-      $.div(children),
-      MergePropsCtx,
-      { onSubmit: props.onSubmit },
-    ),
+    injectProps($.div(children), { onSubmit: props.onSubmit }),
 );
+```
+
+The pipeable form is handy when you already have a pipeline:
+
+```typescript
+children.pipe(injectProps({ onSubmit: handle }));
 ```
 
 This is how `Form.provide` injects `onSubmit` into its first child, and how an `asChild` wrapper forwards props into an unknown element.
 
+Under the hood `injectProps(child, props)` is equivalent to `Effect.provideService(child, MergePropsCtx, props)`. The Tag stays public — a container that reads from it (the pattern in [Reading](#reading)) still just calls `yield* Effect.serviceOption(MergePropsCtx)` — but the helper is the right entry point for the *provider* side: its type signature rejects fragment-rooted Elements, and its contract is "there is one root here that will adopt these props." Reach for the raw `provideService` only when you're building a new tag-based mechanism on top; for ordinary injection, use `injectProps`.
+
+### When the Automatic Root Isn't Your Semantic Root
+
+The automatic merge above lands injected props on the **first `$`-created element** inside the consumer — the "root" by Element-tree position. For most components that's exactly the semantic root, which is why `asChild`-style composition works at all without the wrapped component having to opt in. The case where it diverges is a component whose outermost element is a layout wrapper around the element that should actually receive events and ARIA state:
+
+```typescript
+const MyButton = container((props: { label: string }, children) =>
+  $.div({ class: "button-wrapper" },
+    $.button({ class: "actual-button" }, children),
+  ),
+);
+```
+
+If something wraps `MyButton` with `injectProps(MyButton(…), { onClick, "aria-pressed": true })`, the injected props land on the outer `$.div`, not the inner `$.button`. That's usually not what you want — `onClick` and `aria-pressed` belong on the button, not on a layout div. The automatic merge can't tell the two apart; it just takes the first element it meets.
+
+Two things mitigate the damage out of the box:
+
+- **Explicit props win.** `createElement` merges as `{ ...injected, ...attrs }` — anything the component's author set explicitly beats the injection, so the injection only fills in slots the author left blank. A div with no `onClick` of its own silently picking one up is the worst that happens; nothing the author declared gets overwritten.
+- **Bounded to depth 1.** Each `$.*` element consumes-and-clears, so only one element adopts and nothing further down the tree is touched.
+
+When the semantic root genuinely isn't the outermost `$`-element, the component's author routes injection explicitly by reading `MergePropsCtx` themselves — see the next section. A good rule of thumb: if the outer element is a layout-only wrapper (`.container`, `.wrapper`, `.frame`), route injection to the inner element.
+
 ### Reading
 
-Reading `MergePropsCtx` from a component is **also a supported pattern** — specifically, when a component needs to interleave its own behaviour before running what a parent injected. The canonical case is a validated `Form` that must sequence validation ahead of a parent-provided `onSubmit`:
+Reading `MergePropsCtx` from a component is **also a supported pattern**, for two reasons: to **route** injected props to a specific inner element (the layout-wrapper case from the previous section), and to **interleave** the component's own behaviour before running what a parent injected. Routing is a short spread into the intended child:
+
+```typescript
+const MyButton = container((props: { label: string }, children) =>
+  Effect.gen(function* () {
+    const injected = yield* Effect.serviceOption(MergePropsCtx);
+    const extra = Option.getOrElse(injected, () => ({}));
+    return yield* $.div({ class: "button-wrapper" },
+      // Spread the injected props onto the semantic root, not the wrapper.
+      $.button({ class: "actual-button", ...extra }, children),
+    );
+  }),
+);
+```
+
+The interleave case is deeper. The canonical example is a validated `Form` that must sequence validation ahead of a parent-provided `onSubmit`:
 
 ```typescript
 import { Effect, Option } from "effect";

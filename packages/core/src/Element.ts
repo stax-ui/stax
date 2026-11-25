@@ -1,4 +1,5 @@
-import { Context, type Effect, type Scope } from "effect";
+import { Context, Effect, type Scope } from "effect";
+import { dual } from "effect/Function";
 
 import type { RendererContext } from "./Renderer.js";
 
@@ -34,6 +35,38 @@ export type Element<N = unknown, E = never, R = never> = Effect.Effect<
   N,
   E,
   Scope.Scope | RendererContext | R
+>;
+
+// -----------------------------------------------------------------------------
+// Single-root brand
+// -----------------------------------------------------------------------------
+
+declare const SingleRootBrand: unique symbol;
+
+/**
+ * Nominal brand attached by a backend to the node type its single-root
+ * factories return — e.g. `@stax-ui/dom`'s `$.div`, `$.form`, etc. return
+ * `Element<HTMLDivElement & SingleRoot, …>`. A hypothetical native backend's
+ * `$.view` would brand the same way; its own multi-root factory would not.
+ *
+ * Carried on the Element's `A` (success) channel so inference threads it
+ * through `yield*` and back out of `Effect.gen` bodies — containers
+ * preserve the brand automatically, no special plumbing needed.
+ *
+ * Platform-agnostic: core doesn't know what "single root" means
+ * concretely; it just gates APIs like {@link injectProps} on the marker.
+ */
+export type SingleRoot = { readonly [SingleRootBrand]: true };
+
+/**
+ * Convenience alias for an Element whose node type is branded as
+ * single-root. Equivalent to `Element<N & SingleRoot, E, R>`; use it when
+ * hand-annotating a root type so you don't have to spell the intersection.
+ */
+export type SingleRootElement<N = unknown, E = never, R = never> = Element<
+  N & SingleRoot,
+  E,
+  R
 >;
 
 /**
@@ -102,3 +135,63 @@ export class MergePropsCtx extends Context.Tag("MergePropsCtx")<
   MergePropsCtx,
   Record<string, unknown>
 >() {}
+
+/**
+ * Inject props into `child`'s root element via {@link MergePropsCtx}.
+ *
+ * The sanctioned entry point for the "provider" half of the
+ * `MergePropsCtx` contract — equivalent to
+ * `Effect.provideService(child, MergePropsCtx, props)` but constrained
+ * so that only an Element whose node type carries the {@link SingleRoot}
+ * brand can be targeted. Each backend brands its single-root factory
+ * outputs (e.g. `$.div`, `$.form`) and leaves its multi-root factories
+ * (e.g. `$.fragment` → `Element<DocumentFragment, …>`) unbranded; a
+ * fragment-rooted Element — whether written as `$.fragment(...)` or
+ * returned from a container whose body is a fragment — therefore fails
+ * the constraint at compile time. Authors who need that shape either
+ * wrap the fragment in a container element or route injection to a
+ * specific child by reading {@link MergePropsCtx} themselves.
+ *
+ * Because the brand rides on the Element's `A` channel, inference
+ * preserves it through `yield*` and back out of `Effect.gen` bodies —
+ * containers whose body yields a single-root element stay single-root
+ * with no special handling.
+ *
+ * At runtime the first `$`-created element inside `child` merges
+ * `props` into its own attributes — the child's explicit props win on
+ * conflict. After the merge the Tag is cleared so further descendants
+ * don't re-inherit it. This matches the Radix / Base-UI `asChild`
+ * composition pattern: the component wrapped at the call site becomes
+ * the slot, without having to opt in.
+ *
+ * Direct use of `Effect.provideService(..., MergePropsCtx, ...)` is
+ * still possible — the Tag's stability contract carries that over —
+ * but loses the type constraint and will runtime-die inside
+ * `$.fragment` if the ambient ctx is non-empty. Reach for `injectProps`
+ * unless you have a reason not to.
+ *
+ * @example
+ * ```ts
+ * // Data-first
+ * injectProps($.form(children), { onSubmit: handle });
+ *
+ * // Pipeable (what Form.provide does internally)
+ * children.pipe(injectProps({ onSubmit: handle }));
+ * ```
+ */
+export const injectProps: {
+  (
+    props: Record<string, unknown>,
+  ): <A extends SingleRoot, E, R>(child: Element<A, E, R>) => Element<A, E, R>;
+  <A extends SingleRoot, E, R>(
+    child: Element<A, E, R>,
+    props: Record<string, unknown>,
+  ): Element<A, E, R>;
+} = dual(
+  2,
+  <A extends SingleRoot, E, R>(
+    child: Element<A, E, R>,
+    props: Record<string, unknown>,
+  ): Element<A, E, R> =>
+    Effect.provideService(child, MergePropsCtx, props) as Element<A, E, R>,
+);

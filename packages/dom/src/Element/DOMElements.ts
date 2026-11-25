@@ -5,7 +5,12 @@
 
 import { Effect, Option, Stream } from "effect";
 
-import { MergePropsCtx, Readable, RendererContext } from "@stax-ui/core";
+import {
+  MergePropsCtx,
+  Readable,
+  RendererContext,
+  type SingleRoot,
+} from "@stax-ui/core";
 
 import { CspNonce } from "../CspNonce.js";
 import { splitArgs } from "../helpers/splitArgs.js";
@@ -265,27 +270,34 @@ export type ElementFactory<K extends keyof HTMLElementTagNameMap> = {
   // Tradeoff: `E`/`R` collapse to a single pair, so heterogeneous
   // requirements from siblings become an intersection (contravariant R).
   // For the common wrapper case (E/R passes through) that's exactly right.
+  //
+  // Return type intersects the node with `SingleRoot` so `injectProps`
+  // (and any future API gated on single-rootedness) accepts a
+  // `$`-element without the caller having to think about the brand. The
+  // brand rides on the Element's `A` channel, so container composition
+  // preserves it through `yield*` and `Effect.gen` without special
+  // plumbing. `$.fragment` deliberately returns an un-branded node.
   <E = never, R = never>(
     attrs: HTMLAttributes<HTMLElementTagNameMap[K]>,
     children: ReadonlyArray<ChildInput<E, R>>,
-  ): Element<HTMLElementTagNameMap[K], E, R>;
+  ): Element<HTMLElementTagNameMap[K] & SingleRoot, E, R>;
   <E = never, R = never>(
     children: ReadonlyArray<ChildInput<E, R>>,
-  ): Element<HTMLElementTagNameMap[K], E, R>;
+  ): Element<HTMLElementTagNameMap[K] & SingleRoot, E, R>;
 
   // Variadic overload: max inference across mixed positional children.
   <T extends ReadonlyArray<ChildInput<unknown, unknown>>>(
     attrs: HTMLAttributes<HTMLElementTagNameMap[K]>,
     ...children: T
   ): Element<
-    HTMLElementTagNameMap[K],
+    HTMLElementTagNameMap[K] & SingleRoot,
     ChildInputE<T[number]>,
     ChildInputR<T[number]>
   >;
   <T extends ReadonlyArray<ChildInput<unknown, unknown>>>(
     ...children: T
   ): Element<
-    HTMLElementTagNameMap[K],
+    HTMLElementTagNameMap[K] & SingleRoot,
     ChildInputE<T[number]>,
     ChildInputR<T[number]>
   >;
@@ -298,23 +310,23 @@ export type SVGElementFactory<K extends keyof SVGElementTagNameMap> = {
   <E = never, R = never>(
     attrs: SVGAttributes<SVGElementTagNameMap[K]>,
     children: ReadonlyArray<ChildInput<E, R>>,
-  ): Element<SVGElementTagNameMap[K], E, R>;
+  ): Element<SVGElementTagNameMap[K] & SingleRoot, E, R>;
   <E = never, R = never>(
     children: ReadonlyArray<ChildInput<E, R>>,
-  ): Element<SVGElementTagNameMap[K], E, R>;
+  ): Element<SVGElementTagNameMap[K] & SingleRoot, E, R>;
 
   <T extends ReadonlyArray<ChildInput<unknown, unknown>>>(
     attrs: SVGAttributes<SVGElementTagNameMap[K]>,
     ...children: T
   ): Element<
-    SVGElementTagNameMap[K],
+    SVGElementTagNameMap[K] & SingleRoot,
     ChildInputE<T[number]>,
     ChildInputR<T[number]>
   >;
   <T extends ReadonlyArray<ChildInput<unknown, unknown>>>(
     ...children: T
   ): Element<
-    SVGElementTagNameMap[K],
+    SVGElementTagNameMap[K] & SingleRoot,
     ChildInputE<T[number]>,
     ChildInputR<T[number]>
   >;
@@ -341,17 +353,18 @@ export type SVGElementFactory<K extends keyof SVGElementTagNameMap> = {
  * - `$.fragment(children)` — forwarded-array form with a single
  *   `<E, R>` pair.
  *
- * `MergePropsCtx` behaviour: the fragment is **transparent** —
- * ambient `MergePropsCtx` passes through to children unchanged. Real
- * elements like `$.div` consume the context (merging it into their
- * own attrs) and then clear it for their own children; the fragment
- * has no DOM node to consume with, so there is nothing to clear, and
- * clearing anyway would make injected props silently vanish. Every
- * direct child inside sees the same ambient ctx — for the Checkbox /
- * Switch / Radio case that means e.g. an injected `onClick` reaches
- * the visible element and the hidden `<input>` alike (harmless on the
- * hidden one). To shield a specific child, wrap it with
- * `Effect.provideService(child, MergePropsCtx, {})`.
+ * `MergePropsCtx` behaviour: targeting a fragment with a non-empty
+ * `MergePropsCtx` is a **usage error**. A fragment produces multiple
+ * roots with no canonical adopter, so injection has no well-defined
+ * target. The fragment's node type (`DocumentFragment`) is
+ * deliberately un-branded with {@link SingleRoot}, so `injectProps`
+ * rejects fragment-rooted Elements at compile time; the raw
+ * `Effect.provideService(..., MergePropsCtx, ...)` escape hatch
+ * runtime-dies here with a message pointing at `injectProps`. An
+ * empty record (`{}`) passes — that's the "parent $-element already
+ * consumed and cleared" case, where the fragment is transparently a
+ * no-op. The through-path for other services (theming, router, etc.)
+ * is unchanged.
  *
  * Hydration and SSR are safe without sentinels — the fragment's
  * children are siblings in the outer parent, the hydration walker
@@ -854,6 +867,30 @@ const createFragmentElement = <E, R>(
   children: Child<E, R>,
 ): Element<DocumentFragment, E, R> =>
   Effect.gen(function* () {
+    // Guard: MergePropsCtx targets a single root; a fragment produces
+    // multiple roots with no canonical adopter. If something upstream
+    // provided a non-empty ctx and it reached us, that's a usage
+    // defect — `injectProps` rejects fragment-rooted Elements at the
+    // type level, so this only fires when someone bypasses the helper
+    // with a raw `Effect.provideService(..., MergePropsCtx, ...)`.
+    // An empty record (`{}`) passes — that's the "parent $-element
+    // already consumed and cleared" case, where transparency is fine.
+    const ambient = yield* Effect.serviceOption(MergePropsCtx);
+    if (Option.isSome(ambient) && Object.keys(ambient.value).length > 0) {
+      return yield* Effect.die(
+        new Error(
+          "MergePropsCtx was provided to a $.fragment. MergePropsCtx " +
+            "targets a single root; a fragment produces multiple roots " +
+            "with no canonical adopter. Provide the ctx to a specific " +
+            "$-element inside the fragment, or wrap the fragment in a " +
+            "container element that can consume it. Prefer `injectProps` " +
+            "over `Effect.provideService(..., MergePropsCtx, ...)` — its " +
+            "`A extends SingleRoot` constraint rejects fragment-rooted " +
+            "Elements at compile time.",
+        ),
+      );
+    }
+
     const renderer = yield* RendererContext;
     const fragment = (yield* renderer.createFragment()) as DocumentFragment;
 
