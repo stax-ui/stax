@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.5
+
+### Patch Changes
+
+- Updated dependencies [fca845a]
+- Updated dependencies [132a765]
+  - @stax-ui/core@0.9.0
+  - @stax-ui/dom@0.15.0
+
 ## 0.6.4
 
 ### Patch Changes
