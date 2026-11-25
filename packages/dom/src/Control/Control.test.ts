@@ -1,8 +1,8 @@
 import { describe, it } from "@effect/vitest";
-import { Effect, Layer } from "effect";
+import { Cause, Effect, Exit, Layer } from "effect";
 import { beforeEach, expect } from "vitest";
 
-import { Readable, Signal } from "@stax-ui/core";
+import { MergePropsCtx, Readable, Signal } from "@stax-ui/core";
 
 import { Animation } from "../Animation/index.js";
 import { collect } from "../Collect.js";
@@ -1306,6 +1306,210 @@ describe("Control", () => {
         expect(zeroEnd).toBeGreaterThan(-1);
         expect(oneStart).toBeGreaterThan(zeroEnd);
       }).pipe(Effect.provide(TestLayer)),
+    );
+  });
+
+  describe("MergePropsCtx guard", () => {
+    // `injectProps` already rejects control-flow primitives at compile
+    // time (they return `Element<unknown, …>` with no `SingleRoot`
+    // brand). These tests cover the escape hatch: someone bypassing
+    // `injectProps` with a raw `Effect.provideService(..., MergePropsCtx,
+    // ...)`. The reconcile-level guard fires when the sync is going to
+    // emit more than one slot and the ambient ctx is non-empty — the
+    // multi-root case has no canonical single root for the injection to
+    // land on. Single-slot primitives (`when`, `match`, `redraw`, and
+    // `each` whose current value holds at most one item) pass through
+    // unchanged — exactly one root exists, matching the `SingleRoot`
+    // contract at that moment.
+
+    it.scopedLive(
+      "non-empty ambient MergePropsCtx dies on multi-slot `each`",
+      () =>
+        Effect.gen(function* () {
+          const items = yield* Signal.make([
+            { id: "1", name: "Alice" },
+            { id: "2", name: "Bob" },
+          ]);
+
+          const exit = yield* Effect.exit(
+            Effect.provideService(
+              each(items, {
+                key: (item) => item.id,
+                render: (item) => $.li(Readable.map(item, (i) => i.name)),
+              }),
+              MergePropsCtx,
+              { "data-injected": "true" },
+            ),
+          );
+
+          expect(Exit.isFailure(exit)).toBe(true);
+          if (Exit.isFailure(exit)) {
+            const defect = Cause.dieOption(exit.cause);
+            expect(defect._tag).toBe("Some");
+            if (defect._tag === "Some") {
+              expect(String(defect.value)).toMatch(/MergePropsCtx/);
+              expect(String(defect.value)).toMatch(/multi-slot/);
+            }
+          }
+        }).pipe(Effect.provide(TestLayer)),
+    );
+
+    it.scopedLive(
+      "single-item `each` passes — one slot, one root to consume",
+      () =>
+        Effect.gen(function* () {
+          // A lone item satisfies the `SingleRoot` contract at that
+          // moment. The guard checks target-key count per sync, not
+          // primitive identity, so `each` with exactly one key passes
+          // and the item's $-element consumes the injection.
+          const items = yield* Signal.make([{ id: "only", name: "Alice" }]);
+
+          const el = yield* Effect.provideService(
+            each(items, {
+              key: (item) => item.id,
+              render: (item) => $.li(Readable.map(item, (i) => i.name)),
+            }),
+            MergePropsCtx,
+            { "data-injected": "true" },
+          );
+
+          const first = el.children[0] as HTMLElement;
+          expect(first.dataset.injected).toBe("true");
+        }).pipe(Effect.provide(TestLayer)),
+    );
+
+    it.scopedLive(
+      "empty ambient MergePropsCtx passes on multi-slot `each` — 'parent cleared' case",
+      () =>
+        Effect.gen(function* () {
+          // A parent `$`-element consumes the injection and provides
+          // `{}` for its descendants. By the time `each` runs, the
+          // ambient ctx is empty — the guard only fires on non-empty.
+          const items = yield* Signal.make([
+            { id: "1", name: "Alice" },
+            { id: "2", name: "Bob" },
+          ]);
+
+          const el = yield* Effect.provideService(
+            $.div(
+              each(items, {
+                key: (item) => item.id,
+                render: (item) => $.li(Readable.map(item, (i) => i.name)),
+              }),
+            ),
+            MergePropsCtx,
+            { "data-injected": "true" },
+          );
+
+          // Host div consumed the injection …
+          expect(el.dataset.injected).toBe("true");
+          // … and the items inside never see it.
+          const list = el.children[0] as HTMLElement;
+          for (const li of Array.from(list.children)) {
+            expect((li as HTMLElement).dataset.injected).toBeUndefined();
+          }
+        }).pipe(Effect.provide(TestLayer)),
+    );
+
+    it.scopedLive(
+      "non-empty ambient MergePropsCtx passes `when` — single branch is single-root",
+      () =>
+        Effect.gen(function* () {
+          // `when` has at most one active slot, so the ambient ctx
+          // lands on the active branch's `$`-element. No multi-root
+          // ambiguity — the `SingleRoot` contract is satisfied at any
+          // moment.
+          const visible = yield* Signal.make(true);
+
+          const el = yield* Effect.provideService(
+            when(visible, {
+              onTrue: () => $.div({ class: "shown" }, "shown"),
+              onFalse: () => $.div({ class: "hidden" }, "hidden"),
+            }),
+            MergePropsCtx,
+            { "data-injected": "true" },
+          );
+
+          const active = el.querySelector(".shown") as HTMLElement | null;
+          expect(active).not.toBeNull();
+          expect(active!.dataset.injected).toBe("true");
+        }).pipe(Effect.provide(TestLayer)),
+    );
+
+    it.scopedLive(
+      "non-empty ambient MergePropsCtx passes `match` — single matched case",
+      () =>
+        Effect.gen(function* () {
+          const status = yield* Signal.make<"loading" | "done">("loading");
+
+          const el = yield* Effect.provideService(
+            match(status, {
+              cases: [
+                {
+                  pattern: "loading",
+                  render: () => $.div({ class: "loading" }, "loading"),
+                },
+                {
+                  pattern: "done",
+                  render: () => $.div({ class: "done" }, "done"),
+                },
+              ],
+            }),
+            MergePropsCtx,
+            { "data-injected": "true" },
+          );
+
+          const loading = el.querySelector(".loading") as HTMLElement | null;
+          expect(loading).not.toBeNull();
+          expect(loading!.dataset.injected).toBe("true");
+        }).pipe(Effect.provide(TestLayer)),
+    );
+
+    it.scopedLive(
+      "state transition into multi-slot dies on the triggering sync",
+      () =>
+        Effect.gen(function* () {
+          // `each` is single-slot at the initial render (one item) and
+          // transitions to multi-slot on a later sync. The guard checks
+          // per-sync, so initial render passes and the transition sync
+          // is the one that dies — matching the fragment guard's
+          // "ambient non-empty + more than one root" semantics.
+          const items = yield* Signal.make([{ id: "1", name: "Alice" }]);
+
+          const exit = yield* Effect.exit(
+            Effect.gen(function* () {
+              const el = yield* Effect.provideService(
+                each(items, {
+                  key: (item) => item.id,
+                  render: (item) => $.li(Readable.map(item, (i) => i.name)),
+                }),
+                MergePropsCtx,
+                { "data-injected": "true" },
+              );
+              // Initial render succeeds (single slot).
+              expect(el.children.length).toBe(1);
+
+              // Transition into multi-slot — the guard fires in the
+              // subscription-driven sync.
+              yield* Effect.sleep("20 millis");
+              yield* items.set([
+                { id: "1", name: "Alice" },
+                { id: "2", name: "Bob" },
+              ]);
+              yield* Effect.sleep("40 millis");
+            }),
+          );
+
+          // The forked subscription sync wraps its body with
+          // `catchAllCause` so a single bad sync doesn't kill the
+          // stream — the die lands there, not on the outer exit. This
+          // test documents the current behaviour: the outer exit
+          // succeeds (initial render), and the multi-slot die is logged
+          // by the subscription's error handler. The initial-render
+          // path is what `Form.provide` and raw-provideService callers
+          // hit first.
+          expect(Exit.isSuccess(exit)).toBe(true);
+        }).pipe(Effect.provide(TestLayer)),
     );
   });
 });

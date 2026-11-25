@@ -279,6 +279,8 @@ const Checkbox = $.div({ class: "checkbox" },
 injectProps(Checkbox, { "data-wired": "true" }); // ✓ merges onto the div
 ```
 
+The same multi-root restriction applies to control-flow primitives that reconcile into more than one slot at the same moment — `each`, and `redraw` when its render emits multiple keys. Their return type is `Element<unknown, …>` with no `SingleRoot` brand, so `injectProps` rejects them at compile time; a raw `Effect.provideService(…, MergePropsCtx, …)` that reaches multi-slot `reconcile` runtime-dies with the same shape as the fragment guard. Single-slot primitives (`when`, `match`, `matchOption`, `matchEither`, and `redraw` with one key) pass through — exactly one root exists to consume the injection.
+
 Through-pass of other services (theming, router, etc.) is unchanged — the restriction is specific to `MergePropsCtx`.
 
 ### SSR and Hydration

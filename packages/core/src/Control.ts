@@ -3,7 +3,7 @@ import { Cause, Clock, Effect, Either, Option } from "effect";
 import { ErrorBoundaryCtx } from "./Boundary.js";
 import { ControlCtx } from "./ControlCtx.js";
 import { logDebug, logError } from "./Debug.js";
-import type { Element } from "./Element.js";
+import { MergePropsCtx, type Element } from "./Element.js";
 import { Readable } from "./Readable.js";
 import type { Signal } from "./Signal.js";
 
@@ -100,6 +100,43 @@ export const reconcile = <A, E, R>(
           currentKeys,
           targetKeys,
         });
+
+        // MergePropsCtx guard — mirrors $.fragment's. A multi-slot
+        // reconciliation (this sync emits more than one slot) has no
+        // canonical single root for an ambient injection to land on; if
+        // we let it through, every slot's first `$`-element would merge
+        // the same props into its own attrs. `injectProps` already
+        // rejects control-flow primitives at compile time (they return
+        // `Element<unknown, …>` with no `SingleRoot` brand); this catches
+        // the escape hatch where someone has used
+        // `Effect.provideService(..., MergePropsCtx, …)` directly or a
+        // helper (e.g. `Form.provide`) that doesn't constrain its child
+        // to `SingleRoot`. Single-slot cases (`when`, `match`,
+        // `redraw`, and `each` whose current value happens to hold one
+        // item) pass through unchanged — exactly one root exists to
+        // consume, matching the `SingleRoot` contract at that moment.
+        if (targetKeys.length > 1) {
+          const ambient = yield* Effect.serviceOption(MergePropsCtx);
+          if (Option.isSome(ambient)) {
+            for (const _ in ambient.value) {
+              return yield* Effect.die(
+                new Error(
+                  "MergePropsCtx was provided to a multi-slot " +
+                    "control-flow primitive (e.g. `each`). " +
+                    "MergePropsCtx targets a single root; a multi-slot " +
+                    "reconciliation emits many roots with no canonical " +
+                    "adopter. Wrap the control in a container element " +
+                    "that owns the injection, or route the ctx to a " +
+                    "specific slot by reading `MergePropsCtx` " +
+                    "yourself. Prefer `injectProps` over " +
+                    "`Effect.provideService(..., MergePropsCtx, ...)` " +
+                    "— its `A extends SingleRoot` constraint rejects " +
+                    "control-flow primitives at compile time.",
+                ),
+              );
+            }
+          }
+        }
 
         // Bracket the batch so ControlCtx implementations that need a
         // pre-mutation view of the container (Client mode's FLIP snapshot)
