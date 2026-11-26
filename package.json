@@ -26,6 +26,8 @@
     "sync-template-versions": "node scripts/sync-template-versions.mjs",
     "check-versions": "node scripts/check-versions.mjs",
     "release": "pnpm check-versions && pnpm build && pnpm -r stage publish",
+    "release:ship": "pnpm stage approve && node scripts/post-release.mjs",
+    "release:tag": "node scripts/post-release.mjs",
     "docs:gen": "rm -rf docs && typedoc",
     "prepare": "husky"
   },
