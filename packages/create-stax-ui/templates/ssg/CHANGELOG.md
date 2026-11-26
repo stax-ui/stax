@@ -1,5 +1,14 @@
 # stax-template-ssg
 
+## 0.0.12
+
+### Patch Changes
+
+- Updated dependencies [483f5e1]
+  - @stax-ui/dom@0.16.0
+  - @stax-ui/platform@0.7.6
+  - @stax-ui/router@0.6.6
+
 ## 0.0.11
 
 ### Patch Changes

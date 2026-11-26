@@ -1,5 +1,12 @@
 # media-player
 
+## 0.0.8
+
+### Patch Changes
+
+- Updated dependencies [483f5e1]
+  - @stax-ui/dom@0.16.0
+
 ## 0.0.7
 
 ### Patch Changes

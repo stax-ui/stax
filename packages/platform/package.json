@@ -1,6 +1,6 @@
 {
   "name": "@stax-ui/platform",
-  "version": "0.7.5",
+  "version": "0.7.6",
   "description": "Full-stack meta-framework for Stax applications",
   "type": "module",
   "license": "MPL-2.0",
