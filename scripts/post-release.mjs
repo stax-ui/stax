@@ -71,11 +71,12 @@ console.log(`Candidates from ${versionCommit.slice(0, 8)}:`)
 for (const { name, version } of candidates) console.log(`  ${name}@${version}`)
 console.log()
 
+const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+
 const extractNotes = (changelogPath, version) => {
   if (!existsSync(changelogPath)) return `Release ${version}`
   const md = readFileSync(changelogPath, "utf8")
-  const esc = version.replace(/\./g, "\\.")
-  const header = new RegExp(`^## ${esc}\\s*$`, "m")
+  const header = new RegExp(`^## ${escapeRegex(version)}\\s*$`, "m")
   const m = md.match(header)
   if (!m) return `Release ${version}`
   const start = m.index + m[0].length
