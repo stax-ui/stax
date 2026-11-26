@@ -3,9 +3,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { $ } from "../../Element/index.js";
 import { DOMRendererLive } from "../DOMRenderer.js";
-import { _mountScoped as mount } from "./client.js";
+import { mountScoped as mount } from "./client.js";
 
-describe("_mountScoped", () => {
+describe("mountScoped", () => {
   let container: HTMLElement;
 
   beforeEach(() => {

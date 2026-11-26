@@ -12,7 +12,7 @@
  * @module
  */
 
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Scope } from "effect";
 
 import {
   RendererContext,
@@ -82,15 +82,44 @@ export interface HydrateOptions<
  * });
  * ```
  */
-export function hydrate<
+/**
+ * Hydrate server-rendered HTML inside a caller-managed scope.
+ *
+ * Returns an `Effect<void, never, Scope>` that completes after the
+ * hydration walk and `renderer.completeHydration` — the DOM is
+ * live, event handlers are attached, and reactive bindings are set
+ * up. The scope stays open so forked subscription fibers (popstate
+ * listeners, signal subscribers, PubSubs) live; the caller closes
+ * it to tear down.
+ *
+ * Use this for test harnesses, Storybook, hot-reload — anywhere
+ * hydration needs to actually complete and then be torn down.
+ * Real apps should call {@link hydrate} instead.
+ *
+ * `SignalRegistry` is NOT provided here — supply your own (typically
+ * `SignalRegistry.Live`, or a scoped test variant).
+ *
+ * @example
+ * ```ts
+ * import { Effect } from "effect";
+ * import { SignalRegistry } from "@stax-ui/core";
+ * import { hydrateScoped } from "@stax-ui/dom/hydrate";
+ *
+ * await Effect.runPromise(
+ *   Effect.scoped(
+ *     Effect.gen(function* () {
+ *       yield* hydrateScoped(App(), container);
+ *       // interact, assert; event handlers are live
+ *     }),
+ *   ).pipe(Effect.provide(SignalRegistry.Live)),
+ * );
+ * // scope closes: subscriptions torn down.
+ * ```
+ */
+export function hydrateScoped<
   A extends HTMLElement | SVGElement,
   L extends Layer.Layer<never, never, never> = Layer.Layer<never, never, never>,
 >(
-  // `NoInfer` on the extracted layer type keeps TS from inferring L from
-  // the element's requirements. L is inferred solely from `options.layers`,
-  // then the element must fit `Framework | Layer.Success<L>` — passing an
-  // element that requires a service you forgot to provide via layers is a
-  // type error, not a silent runtime failure.
   element: Element.Element<
     A,
     never,
@@ -101,7 +130,7 @@ export function hydrate<
   >,
   container: HTMLElement,
   options?: HydrateOptions<L>,
-): Promise<void> {
+): Effect.Effect<void, never, Scope.Scope> {
   const opts = options ?? {};
   const renderer = createHydrationRenderer(container, opts);
 
@@ -153,13 +182,12 @@ export function hydrate<
       );
     }
 
-    // Build elementLayers in the OUTER program scope (kept alive by
-    // Effect.never below), not in a per-element scope. Effect.provide
-    // with a scoped Layer wraps the effect in a fresh scope that closes
-    // as soon as the effect completes — since the element function
-    // returns synchronously after building the DOM, that would tear down
-    // Navigation's popstate listener, the SubscriptionRef PubSub, and
-    // any other scoped resources before the user can interact.
+    // Build elementLayers in the OUTER caller scope, not in a per-element
+    // scope. Effect.provide with a scoped Layer wraps the effect in a fresh
+    // scope that closes as soon as the effect completes — since the element
+    // function returns synchronously after building the DOM, that would
+    // tear down Navigation's popstate listener, the SubscriptionRef
+    // PubSub, and any other scoped resources before the user can interact.
     const context = yield* Layer.build(elementLayers);
     yield* Effect.provide(element, context);
 
@@ -169,23 +197,82 @@ export function hydrate<
     // — the first client render matched SSR, and now we transition off
     // the SSR-safe fallback.
     yield* renderer.completeHydration;
-
-    // Keep the scope alive - subscriptions run in forked fibers that need to persist
-    // Wait forever (until page unload) so subscription fibers stay alive
-    yield* Effect.never;
   });
 
-  // Run without awaiting completion - the Effect.never keeps it alive
-  // Type assertion needed because TypeScript can't fully trace the layer dependencies
-  Effect.runFork(
-    Effect.scoped(program).pipe(
-      Effect.provide(HydrationRendererLayer),
-      Effect.provide(SignalRegistry.Live),
-    ) as Effect.Effect<never>,
-  );
+  return program.pipe(Effect.provide(HydrationRendererLayer)) as Effect.Effect<
+    void,
+    never,
+    Scope.Scope
+  >;
+}
 
-  // Return immediately - hydration setup is synchronous, subscriptions are async
-  return Promise.resolve();
+/**
+ * Hydrate server-rendered HTML by attaching to existing DOM
+ * and setting up reactive bindings.
+ *
+ * `R` is inferred from `options.layers` — whatever services the layers
+ * provide are what the element is allowed to require on top of the
+ * framework-provided contexts. Pass the layers via `options.layers` rather
+ * than `Effect.provide(App(), layer)` before calling hydrate — the latter
+ * scopes the layer to the element's short-lived render.
+ *
+ * The returned Promise resolves when the hydration walk and
+ * `completeHydration` are done — event handlers attached, DOM live.
+ * Subscription fibers (popstate, signal subscribers, PubSubs) continue
+ * running in the background until page unload; `hydrate` itself never
+ * closes their scope. For tear-down in tests, use {@link hydrateScoped}.
+ *
+ * @param element - The Element to hydrate (same component tree as SSR)
+ * @param container - The DOM container with server-rendered HTML
+ * @param options - Hydration options; `layers` provides `R` to the element
+ * @returns Promise that resolves when hydration is complete
+ *
+ * @example
+ * ```ts
+ * import { hydrate } from "@stax-ui/dom/hydrate";
+ * import { Platform } from "@stax-ui/platform";
+ * import { App } from "./App";
+ * import { router } from "./routes";
+ *
+ * hydrate(App(), document.getElementById("root")!, {
+ *   layers: Platform.makeClientLayer(router),
+ * });
+ * ```
+ */
+export function hydrate<
+  A extends HTMLElement | SVGElement,
+  L extends Layer.Layer<never, never, never> = Layer.Layer<never, never, never>,
+>(
+  // `NoInfer` on the extracted layer type keeps TS from inferring L from
+  // the element's requirements. L is inferred solely from `options.layers`,
+  // then the element must fit `Framework | Layer.Success<L>` — passing an
+  // element that requires a service you forgot to provide via layers is a
+  // type error, not a silent runtime failure.
+  element: Element.Element<
+    A,
+    never,
+    | RendererContext
+    | ControlCtx
+    | SuspenseBoundaryCtx
+    | NoInfer<Layer.Layer.Success<L>>
+  >,
+  container: HTMLElement,
+  options?: HydrateOptions<L>,
+): Promise<void> {
+  return new Promise<void>((resolve) => {
+    Effect.runFork(
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* hydrateScoped(element, container, options);
+          // Walk + completeHydration done — resolve the caller's promise.
+          resolve();
+          // Keep subscription fibers (popstate, signal subscribers, PubSubs)
+          // alive until page unload.
+          yield* Effect.never;
+        }),
+      ).pipe(Effect.provide(SignalRegistry.Live)) as Effect.Effect<never>,
+    );
+  });
 }
 
 export type { HydrationRenderer } from "./HydrationRenderer.js";

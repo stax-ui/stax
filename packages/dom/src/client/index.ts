@@ -1,1 +1,1 @@
-export { mount } from "../Render/client/index.js";
+export { mount, mountScoped } from "../Render/client/index.js";

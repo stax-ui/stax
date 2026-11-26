@@ -44,19 +44,40 @@ import { makeIdGeneratorLayer } from "../../UniqueId.js";
 import { DOMRenderer } from "../DOMRenderer.js";
 
 /**
- * Provides the client-side rendering layers (Renderer, ControlCtx,
- * SuspenseBoundary, AsyncCache) to an element, renders it, and
- * inserts it into the container. Registers a scoped finalizer to
- * pull the element back out when the scope closes.
+ * Mount a Stax element into a DOM container inside a caller-managed
+ * scope. Provides the full client render stack (Renderer, ControlCtx,
+ * SuspenseBoundary, AsyncCache, CSP nonce, IdGenerator) to the
+ * element, inserts the rendered node into `container`, and registers
+ * a finalizer that pulls the node back out when the scope closes.
  *
- * The scoped variant that {@link mount} builds on top of, exported
- * for tests that want to observe DOM after insertion without the
- * fiber getting parked on `Effect.never`. Real applications should
- * use `mount` directly.
+ * Use this when you need DOM tear-down on scope close — test harnesses,
+ * Storybook, hot-reload. Finalizers also run signal/subscription
+ * clean-up, `FocusTrap` / `ScrollLock` release, and any other
+ * `Effect.addFinalizer` work the tree set up. Real applications
+ * should call {@link mount} instead: it stakes out the page's
+ * lifetime fiber and never closes its scope.
  *
- * @internal
+ * `SignalRegistry` is NOT provided here — callers supply their own
+ * (typically `SignalRegistry.Live`, or a scoped test variant).
+ *
+ * @example
+ * ```ts
+ * import { Effect, Scope } from "effect";
+ * import { SignalRegistry } from "@stax-ui/core";
+ * import { mountScoped } from "@stax-ui/dom/client";
+ *
+ * await Effect.runPromise(
+ *   Effect.scoped(
+ *     Effect.gen(function* () {
+ *       yield* mountScoped(App(), container);
+ *       // interact with the rendered DOM, make assertions...
+ *     }),
+ *   ).pipe(Effect.provide(SignalRegistry.Live)),
+ * );
+ * // scope closes here: DOM pulled, subscriptions torn down.
+ * ```
  */
-export const _mountScoped = (
+export const mountScoped = (
   element: Element.Element<
     HTMLElement,
     never,
@@ -168,7 +189,7 @@ export const mount = <R = never>(
   },
 ): Promise<void> => {
   const program = Effect.gen(function* () {
-    yield* _mountScoped(
+    yield* mountScoped(
       element as Element.Element<
         HTMLElement,
         never,

@@ -1,5 +1,6 @@
 export {
   hydrate,
+  hydrateScoped,
   createHydrationRenderer,
   HydrationContext,
   type HydrateOptions,
