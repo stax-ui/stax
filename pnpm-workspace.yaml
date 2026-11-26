@@ -11,6 +11,11 @@ packages:
   # workspace still get the real npm ranges as written.
   - "packages/create-stax-ui/templates/*"
 
+allowBuilds:
+  "@parcel/watcher": true
+  esbuild: true
+  msgpackr-extract: true
+
 overrides:
   # Force a single `effect` copy across the workspace. Without this pin,
   # @effect/platform (peer ^3.0.0 → 3.19.13) and @effect/vitest (peer
