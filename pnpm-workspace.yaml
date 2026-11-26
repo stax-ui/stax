@@ -18,10 +18,10 @@ allowBuilds:
 
 overrides:
   # Force a single `effect` copy across the workspace. Without this pin,
-  # @effect/platform (peer ^3.0.0 → 3.19.13) and @effect/vitest (peer
-  # ^3.0.0 → 3.19.19) resolve to different copies and the runtime prints
-  # hundreds of "Executing Effect X under Runtime Y" warnings during tests.
-  effect: "3.19.19"
+  # @effect/platform (peer ^3.19.13) and @effect/vitest (peer ^3.22.4)
+  # resolve to different copies and the runtime prints hundreds of
+  # "Executing Effect X under Runtime Y" warnings during tests.
+  effect: "3.22.5"
   # Route every workspace project's `@stax-ui/*` deps to the workspace
   # copies at install time — including the create-stax-ui templates,
   # which need to build against the current source rather than the last
