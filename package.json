@@ -4,7 +4,7 @@
   "private": true,
   "description": "A reactive UI framework built on Effect.ts primitives",
   "type": "module",
-  "packageManager": "pnpm@10.34.9",
+  "packageManager": "pnpm@12.23.0",
   "license": "MPL-2.0",
   "author": "Jon Laing",
   "repository": {
@@ -25,7 +25,9 @@
     "version": "changeset version && pnpm sync-template-versions && pnpm check-versions",
     "sync-template-versions": "node scripts/sync-template-versions.mjs",
     "check-versions": "node scripts/check-versions.mjs",
-    "release": "pnpm check-versions && pnpm build && changeset publish",
+    "release": "pnpm check-versions && pnpm build && pnpm -r stage publish",
+    "release:ship": "pnpm stage approve && node scripts/post-release.mjs",
+    "release:tag": "node scripts/post-release.mjs",
     "docs:gen": "rm -rf docs && typedoc",
     "prepare": "husky"
   },
