@@ -12,4 +12,4 @@
  * @module
  */
 
-export { mount } from "./client.js";
+export { mount, mountScoped } from "./client.js";

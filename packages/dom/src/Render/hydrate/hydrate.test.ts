@@ -8,7 +8,7 @@ import { Boundary } from "../../Boundary.js";
 import { animated, each, match, when } from "../../Control/index.js";
 import { $ } from "../../Element/index.js";
 import { renderToString } from "../server/index.js";
-import { hydrate } from "./index.js";
+import { hydrate, hydrateScoped } from "./index.js";
 
 describe("Hydration", () => {
   let container: HTMLElement;
@@ -757,6 +757,67 @@ describe("Hydration", () => {
       // finalizer must NOT have fired yet. Before the fix it fired
       // synchronously right after the element function returned.
       expect(finalizer).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("hydrateScoped", () => {
+    it("completes once the hydration walk is done", async () => {
+      const html = await Effect.runPromise(
+        renderToString($.div({ class: "scoped" }, $.of("ready"))),
+      );
+      container.innerHTML = html;
+
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            yield* hydrateScoped(
+              $.div({ class: "scoped" }, $.of("ready")),
+              container,
+            );
+            // By the time hydrateScoped's effect completes, the walk
+            // is finished — synchronous assertions are safe here, no
+            // `await new Promise(r => setTimeout(r, 0))` needed.
+            expect(container.querySelector(".scoped")?.textContent).toBe(
+              "ready",
+            );
+          }),
+        ),
+      );
+    });
+
+    it("tears down scoped resources when the caller closes the scope", async () => {
+      interface MarkerSvc {
+        readonly value: string;
+      }
+      const Marker = Context.GenericTag<MarkerSvc>("test-scoped/Marker");
+
+      const finalizer = vi.fn();
+      const markerLayer = Layer.scoped(
+        Marker,
+        Effect.gen(function* () {
+          yield* Effect.addFinalizer(() => Effect.sync(() => finalizer()));
+          return { value: "alive" };
+        }),
+      );
+
+      const element = Effect.gen(function* () {
+        const marker = yield* Marker;
+        return yield* $.div({ class: "scoped-marker" }, $.of(marker.value));
+      });
+
+      container.innerHTML = `<div class="scoped-marker">alive</div>`;
+
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            yield* hydrateScoped(element, container, { layers: markerLayer });
+            // Scope still open — finalizer hasn't fired.
+            expect(finalizer).not.toHaveBeenCalled();
+          }),
+        ),
+      );
+      // Scope closed — finalizer fired exactly once.
+      expect(finalizer).toHaveBeenCalledTimes(1);
     });
   });
 });
